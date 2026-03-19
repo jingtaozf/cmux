@@ -1,0 +1,23 @@
+CLI/cmux.swift
+  f8fd5aa7edf464a0 776-837,865-866,1721-1731,1734-1751,1755-1761,1765-1768,1772-1782,1787-1788,1792-1795,1797-1858,1860-1866,2142-2146,2273-2285,2329-2336,4711,5345-5362,9109-9126,9129-9146,9613-9618
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.15",
+  "base_commit_sha": "2503bc9f8d9dc2ab7435545fd5f4678da2003871",
+  "prompts": {
+    "f8fd5aa7edf464a0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f38f9cba-089e-4a9f-af30-1b3c14fcb2f4",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jingtao Xu <jingtaozf@gmail.com>",
+      "messages": [],
+      "total_additions": 16,
+      "total_deletions": 2,
+      "accepted_lines": 277,
+      "overriden_lines": 0
+    }
+  }
+}
