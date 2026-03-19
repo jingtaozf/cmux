@@ -1,0 +1,25 @@
+Sources/TerminalController.swift
+  f8fd5aa7edf464a0 1556-1558,13209-13238
+CLI/cmux.swift
+  f8fd5aa7edf464a0 1792-1810,5331-5348,9599
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.15",
+  "base_commit_sha": "be75a588e0f2c5f505c194dd51dc3ace86713360",
+  "prompts": {
+    "f8fd5aa7edf464a0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f38f9cba-089e-4a9f-af30-1b3c14fcb2f4",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jingtao Xu <jingtaozf@gmail.com>",
+      "messages": [],
+      "total_additions": 85,
+      "total_deletions": 14,
+      "accepted_lines": 71,
+      "overriden_lines": 0
+    }
+  }
+}
