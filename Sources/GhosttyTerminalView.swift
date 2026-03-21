@@ -2183,6 +2183,26 @@ class GhosttyApp {
                 }
             }
             return true
+        case GHOSTTY_ACTION_COMMAND_FINISHED:
+            guard let tabId = surfaceView.tabId else { return true }
+            let exitCode = Int(action.action.command_finished.exit_code)
+            let durationNs = action.action.command_finished.duration
+            let durationMs = durationNs > 0 ? Int(durationNs / 1_000_000) : 0
+            DispatchQueue.main.async {
+                let owningManager = AppDelegate.shared?.tabManagerFor(tabId: tabId) ?? AppDelegate.shared?.tabManager
+                if let workspace = owningManager?.tabs.first(where: { $0.id == tabId }) {
+                    workspace.lastCommandExitCode = exitCode
+                    workspace.lastCommandDurationMs = durationMs
+                }
+                // Fire wait-for signal: command-finished-<tab-uuid>
+                let signalName = "command-finished-\(tabId.uuidString)"
+                let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
+                let sanitized = signalName.unicodeScalars.map { allowed.contains($0) ? Character($0) : "_" }
+                let signalPath = "/tmp/cmux-wait-for-\(String(sanitized)).sig"
+                FileManager.default.createFile(atPath: signalPath, contents: Data())
+            }
+            return true
+
         case GHOSTTY_ACTION_PWD:
             guard let tabId = surfaceView.tabId,
                   let surfaceId = surfaceView.terminalSurface?.id else { return true }

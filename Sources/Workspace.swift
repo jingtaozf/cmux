@@ -916,6 +916,11 @@ final class Workspace: Identifiable, ObservableObject {
     @Published var customColor: String?  // hex string, e.g. "#C0392B"
     @Published var currentDirectory: String
 
+    /// Last command exit code from OSC 133 D (-1 = no exit code reported)
+    var lastCommandExitCode: Int = -1
+    /// Last command duration in milliseconds (0 = not measured)
+    var lastCommandDurationMs: Int = 0
+
     /// Ordinal for CMUX_PORT range assignment (monotonically increasing per app session)
     var portOrdinal: Int = 0
 
