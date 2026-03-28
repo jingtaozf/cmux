@@ -1,0 +1,29 @@
+Sources/GhosttyTerminalView.swift
+  f8fd5aa7edf464a0 2186-2205
+Sources/Workspace.swift
+  f8fd5aa7edf464a0 919-923
+Sources/TerminalController.swift
+  f8fd5aa7edf464a0 1556-1558,13209-13238,14084
+CLI/cmux.swift
+  f8fd5aa7edf464a0 4959,4961,4968-4969,4972-4973,5314,8095,8105,8117-8149,8151-8155,8157
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.20",
+  "base_commit_sha": "167cb98873c1d5a8ac95256335b44603a0242777",
+  "prompts": {
+    "f8fd5aa7edf464a0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f38f9cba-089e-4a9f-af30-1b3c14fcb2f4",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jingtao Xu <jingtaozf@gmail.com>",
+      "messages": [],
+      "total_additions": 26,
+      "total_deletions": 0,
+      "accepted_lines": 107,
+      "overriden_lines": 0
+    }
+  }
+}
