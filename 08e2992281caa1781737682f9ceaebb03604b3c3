@@ -1,0 +1,23 @@
+Sources/ContentView.swift
+  f8fd5aa7edf464a0 9779,9836,12495,12637,12645,12830,12833,12857,12939,12963
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "08e2992281caa1781737682f9ceaebb03604b3c3",
+  "prompts": {
+    "f8fd5aa7edf464a0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f38f9cba-089e-4a9f-af30-1b3c14fcb2f4",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jingtao Xu",
+      "messages": [],
+      "total_additions": 24,
+      "total_deletions": 18,
+      "accepted_lines": 24,
+      "overriden_lines": 0
+    }
+  }
+}
