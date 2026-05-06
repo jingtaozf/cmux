@@ -1,0 +1,631 @@
+tests_v2/test_ssh_remote_docker_reconnect.py
+  377ce7eb4f725aa3 25
+web/messages/ru.json
+  377ce7eb4f725aa3 308,314-318,321-322,325-355,376,403-404,647-689,703,710-743
+tests/test_bonsplit_tab_drag_overlay_gate.py
+  377ce7eb4f725aa3 183,186-191,219
+.github/swift-file-length-budget.tsv
+  377ce7eb4f725aa3 1-79
+tests/test_nested_split_no_arranged_subview_underflow.py
+  377ce7eb4f725aa3 25
+.claude/commands/release-local.md
+  377ce7eb4f725aa3 41,45-46
+web/data/cmux-shortcuts.ts
+  377ce7eb4f725aa3 28-33,35-46,51-55,77-93,111-116,132,170,173
+web/messages/no.json
+  377ce7eb4f725aa3 308,314-319,321-322,325-355,376,403-404,647-689,703,710-743
+cmux.entitlements
+  377ce7eb4f725aa3 11-12
+cmux-helper.entitlements
+  377ce7eb4f725aa3 1-12
+tests_v2/test_tmux_compat_geometry.py
+  377ce7eb4f725aa3 26
+web/services/vms/telemetry.ts
+  377ce7eb4f725aa3 1-29
+.github/workflows/ci-macos-compat.yml
+  377ce7eb4f725aa3 4,14-15,19-20,26,57,85,94,166,182-184,194
+skills.sh
+  377ce7eb4f725aa3 1-164
+tests/test_ci_swift_file_length_budget.sh
+  377ce7eb4f725aa3 1-172
+web/scripts/cloud-vm/smoke-vm-api.mjs
+  377ce7eb4f725aa3 1-163
+web/app/layout.tsx
+  377ce7eb4f725aa3 2-3
+docs/ghostty-fork.md
+  377ce7eb4f725aa3 15-19,65-73,82-83,110-115,125-177,201-242,254-257,263-266,285-288
+tests_v2/test_browser_cli_agent_port.py
+  377ce7eb4f725aa3 22
+tests_v2/test_ssh_remote_interactive_cmux_command_regression.py
+  377ce7eb4f725aa3 19
+web/tests/vm-workflows.test.ts
+  377ce7eb4f725aa3 1-782
+web/instrumentation.ts
+  377ce7eb4f725aa3 1-5
+web/app/api/vm/[id]/ssh-endpoint/route.ts
+  377ce7eb4f725aa3 1-46
+tests_v2/test_split_flash_and_layout.py
+  377ce7eb4f725aa3 19
+tests_v2/test_rename_tab_cli_parity.py
+  377ce7eb4f725aa3 16
+dogfood/directory-actions/alpha/nested/.cmux/icons/nested-terminal.svg
+  377ce7eb4f725aa3 1-5
+tests_v2/test_command_palette_switcher_type_labels.py
+  377ce7eb4f725aa3 19
+tests_v2/test_shortcut_window_scope.py
+  377ce7eb4f725aa3 19
+tests_v2/test_terminal_input_render_report.py
+  377ce7eb4f725aa3 15,32
+web/messages/uk.json
+  377ce7eb4f725aa3 308,314-319,321-322,325-355,376,403-404,647-689,788,795-828
+tests_v2/test_command_palette_modes.py
+  377ce7eb4f725aa3 21
+.github/workflows/cloud-vm-smoke.yml
+  377ce7eb4f725aa3 1-86
+tests/test_terminal_input_render_report.py
+  377ce7eb4f725aa3 15,32
+tests_v2/test_surface_move_reorder_api.py
+  377ce7eb4f725aa3 13
+tests_v2/test_ssh_remote_docker_bootstrap_nonlogin_shell.py
+  377ce7eb4f725aa3 19
+web/messages/da.json
+  377ce7eb4f725aa3 308,314-319,321-322,325-355,376,403-404,647-689,703,710-743
+tests/test_visual_screenshots.py
+  377ce7eb4f725aa3 36
+tests_v2/test_command_palette_search_action_sync.py
+  377ce7eb4f725aa3 18
+.gitignore
+  377ce7eb4f725aa3 14
+tests_v2/config_source_probe.swift
+  377ce7eb4f725aa3 1-75
+skills/cmux/references/panes-surfaces.md
+  377ce7eb4f725aa3 33,37
+tests_v2/test_command_palette_shortcut_hint_sync.py
+  377ce7eb4f725aa3 19
+tests_v2/test_pane_resize_preserves_visible_content.py
+  377ce7eb4f725aa3 132
+tests_v2/test_cli_sidebar_metadata_commands.py
+  377ce7eb4f725aa3 16
+tests_v2/test_trigger_flash.py
+  377ce7eb4f725aa3 18
+web/docker-compose.db.yml
+  377ce7eb4f725aa3 1-21
+web/app/api/vm/[id]/exec/route.ts
+  377ce7eb4f725aa3 1-65
+web/drizzle.config.ts
+  377ce7eb4f725aa3 1-23
+tests_v2/test_command_palette_search_typing_stability.py
+  377ce7eb4f725aa3 18
+tests/test_split_flash_and_layout.py
+  377ce7eb4f725aa3 19
+scripts/swift_file_length_budget.py
+  377ce7eb4f725aa3 1-218
+web/messages/fr.json
+  377ce7eb4f725aa3 308,314-318,321-322,325-355,376,378,403-404,647-689,703,710-743
+tests/test_claude_hook_stop_last_assistant.py
+  377ce7eb4f725aa3 1-180
+tests/test_session_relaunch_resumes_agent_sessions.py
+  377ce7eb4f725aa3 1-373
+tests_v2/test_nested_split_preserves_existing_split.py
+  377ce7eb4f725aa3 27
+tests_v2/test_config_settings_sources_and_sync.py
+  377ce7eb4f725aa3 1-300
+tests/test_claude_wrapper_hooks.py
+  377ce7eb4f725aa3 8,48-49,68,80,162,169-172,194,203,214,223-327,334-339,364-368,370,382,393-398,408-510,513-514,532-533,540,555-603,605,619-636,638,659-664,667-668,670
+daemon/remote/cmd/cmuxd-remote/ws_rpc_test.go
+  377ce7eb4f725aa3 1-239
+tests_v2/test_command_palette_window_scope.py
+  377ce7eb4f725aa3 18
+web/scripts/cloud-vm/migrate-vercel-aurora-iam.mjs
+  377ce7eb4f725aa3 1-68
+web/db/migrations/20260425062520_keen_kronos/migration.sql
+  377ce7eb4f725aa3 1-52
+tests/test_issue_1138_sidebar_pr_polling.py
+  377ce7eb4f725aa3 3,6-9,70-74,103,110,116,118,120,123,125,127,130,132-133,138,140,145,149,151,162,173,198,229,231-233,236-241,244-247,250-252,255-257,260-265,278-283,313
+tests_v2/test_v1_panel_creation_preserves_focus.py
+  377ce7eb4f725aa3 16
+web/data/cmux-settings.schema.json
+  377ce7eb4f725aa3 4-5
+web/db/migrations/20260425092120_worried_supernaut/snapshot.json
+  377ce7eb4f725aa3 1-832
+web/messages/ko.json
+  377ce7eb4f725aa3 308,314-318,321-322,325-355,376-378,403-404,647-689,703,710-743
+web/services/vms/errors.ts
+  377ce7eb4f725aa3 1-148
+tests_v2/test_split_cmd_d_ctrl_d_two_pane_frame_guard.py
+  377ce7eb4f725aa3 23
+web/app/api/vm/[id]/route.ts
+  377ce7eb4f725aa3 1-33
+tests_v2/test_ssh_remote_browser_favicon_uses_proxy.py
+  377ce7eb4f725aa3 19
+tests_v2/test_cli_browser_console_errors_text.py
+  377ce7eb4f725aa3 21
+web/services/vms/entitlements.ts
+  377ce7eb4f725aa3 1-139
+.github/workflows/ci.yml
+  377ce7eb4f725aa3 8-14,25,48-55,61,64,67,83,86,94-147,149,154,178,205,212,221,299,315-319,326,331,355,382,389,398,431-434,498-592,594,599,642,649,887
+tests/test_nested_split_does_not_disappear.py
+  377ce7eb4f725aa3 28
+tests_v2/test_command_palette_switcher_all_windows.py
+  377ce7eb4f725aa3 18
+tests_v2/test_split_cmd_shift_d_ctrl_d_no_portal_orphans.py
+  377ce7eb4f725aa3 25
+web/app/lib/agent-page-markdown.ts
+  377ce7eb4f725aa3 1-420
+tests_v2/test_terminal_focus_routing.py
+  377ce7eb4f725aa3 24
+scripts/ghosttykit-checksums.txt
+  377ce7eb4f725aa3 17-27
+daemon/remote/cmd/cmuxd-remote/ws_pty_test.go
+  377ce7eb4f725aa3 1-297
+tests_v2/test_browser_api_p0.py
+  377ce7eb4f725aa3 14
+web/app/[locale]/docs/skills/page.tsx
+  377ce7eb4f725aa3 1-161
+tests_v2/test_command_palette_rename_enter.py
+  377ce7eb4f725aa3 18
+tests/test_ci_self_hosted_guard.sh
+  377ce7eb4f725aa3 31
+package.json
+  377ce7eb4f725aa3 2-4,6
+tests_v2/test_new_tab_render_after_splits.py
+  377ce7eb4f725aa3 28
+tests_v2/test_tmux_compat_matrix.py
+  377ce7eb4f725aa3 18
+dogfood/directory-actions/legacy/prefer-dot-cmux/.cmux/cmux.json
+  377ce7eb4f725aa3 1-31
+tests_v2/test_browser_cli_wait_and_screenshot.py
+  377ce7eb4f725aa3 17
+tests_v2/test_pane_resize_preserves_ls_scrollback.py
+  377ce7eb4f725aa3 177
+tests_v2/test_pane_break_swap_preserve_focus.py
+  377ce7eb4f725aa3 15
+web/messages/ar.json
+  377ce7eb4f725aa3 308,314-319,321-322,325-355,376,403-404,647-689,703,710-743
+tests_v2/test_visual_screenshots.py
+  377ce7eb4f725aa3 35
+docs/cloud-vm-backend-rollout-todo.md
+  377ce7eb4f725aa3 1-385
+web/scripts/dev-local.sh
+  377ce7eb4f725aa3 1-153
+cmux.release.entitlements
+  377ce7eb4f725aa3 1-24
+tests/test_codex_feed_hooks.py
+  377ce7eb4f725aa3 1-274
+tests_v2/test_ssh_remote_second_session_mux_regression.py
+  377ce7eb4f725aa3 17
+web/app/globals.css
+  377ce7eb4f725aa3 151,183-184
+tests/test_cli_layout_focus_contract.py
+  377ce7eb4f725aa3 1-238
+scripts/kitty-image-demo.sh
+  377ce7eb4f725aa3 1-283
+web/services/vms/repository.ts
+  377ce7eb4f725aa3 1-349
+web/app/agent-page-variant/route.ts
+  377ce7eb4f725aa3 1-137
+web/messages/en.json
+  377ce7eb4f725aa3 319-320,347-349,356-357,362-366,369-370,372-403,424,451-452,456,458,460-461,703-745,948,956-989
+tests_v2/test_ssh_remote_port_detection.py
+  377ce7eb4f725aa3 23
+tests_v2/test_cli_new_workspace_command_queue.py
+  377ce7eb4f725aa3 18
+web/messages/km.json
+  377ce7eb4f725aa3 308,314-319,321-323,325-355,376,403-404,647-689,703,710-743
+tests/test_terminal_portal_hosting.py
+  377ce7eb4f725aa3 17
+docs/cli-contract.md
+  377ce7eb4f725aa3 1-456
+tests_v2/test_ssh_remote_cli_relay.py
+  377ce7eb4f725aa3 21
+.github/workflows/perf-activation.yml
+  377ce7eb4f725aa3 1-190
+tests_v2/test_ssh_remote_docker_forwarding.py
+  377ce7eb4f725aa3 25
+dogfood/directory-actions/legacy/prefer-dot-cmux/.cmux/icons/winner-terminal.svg
+  377ce7eb4f725aa3 1-4
+web/proxy.ts
+  377ce7eb4f725aa3 4,19-35,58
+web/scripts/load-dev-env.sh
+  377ce7eb4f725aa3 1-109
+tests_v2/test_cli_identify_ref_resolution.py
+  377ce7eb4f725aa3 17
+tests/test_bundled_ghostty_theme_picker_helper.sh
+  377ce7eb4f725aa3 7-9,11-13,15-44,46,53-206
+web/app/handler/layout.tsx
+  377ce7eb4f725aa3 1-56
+.claude/commands/release.md
+  377ce7eb4f725aa3 59-61
+scripts/swift_warning_budget.py
+  377ce7eb4f725aa3 1-235
+scripts/prune_nightly_release_assets.py
+  377ce7eb4f725aa3 1-184
+.github/workflows/nightly.yml
+  377ce7eb4f725aa3 38,107,178,185,188,213-219,395-433,446-449,560,579-590,593
+daemon/remote/cmd/cmuxd-remote/ws_pty.go
+  377ce7eb4f725aa3 1-537
+.greptile/config.json
+  377ce7eb4f725aa3 1-58
+docs/dock.md
+  377ce7eb4f725aa3 1-94
+tests/test_restore_session_relaunches_codex_resume.py
+  377ce7eb4f725aa3 1-296
+tests/test_ci_ghosttykit_checksum_verification.sh
+  377ce7eb4f725aa3 30
+scripts/reload.sh
+  377ce7eb4f725aa3 14-17,125-126,156-213,340,350-420,437,443-491,557,559,562-575,582-583,605,611-615,618-619,628-637,644-648,651-655,658-659,661,690-708,710-711,713-714,718-724,748-751
+tests_v2/test_initial_terminal_interactive_and_rendering.py
+  377ce7eb4f725aa3 26
+tests_v2/test_split_cmd_d_ctrl_d_geometry_fuzz.py
+  377ce7eb4f725aa3 20
+web/messages/th.json
+  377ce7eb4f725aa3 308,314-319,321-322,325-355,376,403-404,647-689,703,710-743
+web/services/vms/config.ts
+  377ce7eb4f725aa3 1-78
+web/scripts/migrate-aws-rds-iam.ts
+  377ce7eb4f725aa3 1-26
+web/app/[locale]/docs/changelog/changelog-media.ts
+  377ce7eb4f725aa3 29-68
+web/data/cmux.schema.json
+  377ce7eb4f725aa3 1-723
+tests/test_initial_terminal_interactive_and_rendering.py
+  377ce7eb4f725aa3 26
+tests_v2/test_browser_api_unsupported_matrix.py
+  377ce7eb4f725aa3 12
+tests_v2/test_workspace_create_layout.py
+  377ce7eb4f725aa3 1-328
+.greptile/rules.md
+  377ce7eb4f725aa3 1-16
+web/app/[locale]/docs/configuration/page.tsx
+  377ce7eb4f725aa3 7,33,35,38,44-46,57-63,82-83,252,256-261,263-264,268,271,275-279,295,301-304,358-364
+.github/workflows/cloud-vm-migrate.yml
+  377ce7eb4f725aa3 1-156
+tests_v2/cmux.py
+  377ce7eb4f725aa3 58
+tests_v2/test_nested_split_panel_routing.py
+  377ce7eb4f725aa3 26
+tests_v2/test_tab_workspace_action_naming.py
+  377ce7eb4f725aa3 16
+web/messages/tr.json
+  377ce7eb4f725aa3 308,314-319,321-322,325-355,376,403-404,647-689,703,710-743
+dogfood/directory-actions/.cmux/icons/root-terminal.svg
+  377ce7eb4f725aa3 1-5
+web/.envrc
+  377ce7eb4f725aa3 1
+tests/test_nested_split_no_detach_during_update.py
+  377ce7eb4f725aa3 29
+web/db/migrations/20260427002930_narrow_onslaught/snapshot.json
+  377ce7eb4f725aa3 1-940
+web/scripts/build-cloud-vm-images.ts
+  377ce7eb4f725aa3 1-362
+docs/notifications.md
+  377ce7eb4f725aa3 5-6
+web/tests/bun-test.d.ts
+  377ce7eb4f725aa3 1-10
+web/scripts/cloud-vm/audit-vercel-env.mjs
+  377ce7eb4f725aa3 1-42
+.greptile/files.json
+  377ce7eb4f725aa3 1-54
+web/services/vms/drivers/index.ts
+  377ce7eb4f725aa3 1-30
+daemon/remote/cmd/cmuxd-remote/agent_launch.go
+  377ce7eb4f725aa3 479
+web/app/[locale]/components/code-block.tsx
+  377ce7eb4f725aa3 14,16-17,27,34,38,46,53
+web/scripts/test-cloud-vm-ws-auth.ts
+  377ce7eb4f725aa3 1-560
+daemon/remote/go.mod
+  377ce7eb4f725aa3 4-8
+dogfood/directory-actions/alpha/nested/.cmux/cmux.json
+  377ce7eb4f725aa3 1-31
+.github/review-bot-rules/swift-concurrency-modernization.md
+  377ce7eb4f725aa3 1-19
+cmux.nightly.entitlements
+  377ce7eb4f725aa3 1-24
+tests_v2/test_browser_api_comprehensive.py
+  377ce7eb4f725aa3 14
+tests_v2/test_command_palette_focus.py
+  377ce7eb4f725aa3 18
+web/app/handler/[...stack]/page.tsx
+  377ce7eb4f725aa3 1-14
+web/db/migrations/20260425062520_keen_kronos/snapshot.json
+  377ce7eb4f725aa3 1-746
+scripts/validate-xcframework-archive.py
+  377ce7eb4f725aa3 1-49
+tests_v2/test_workspace_relative.py
+  377ce7eb4f725aa3 22
+tests_v2/test_command_palette_switcher_renamed_surface.py
+  377ce7eb4f725aa3 15
+tests/test_cli_omx_hud_tmux_split.py
+  377ce7eb4f725aa3 1-592
+tests_v2/test_nested_split_no_arranged_subview_underflow.py
+  377ce7eb4f725aa3 25
+scripts/build-ghostty-cli-helper.sh
+  377ce7eb4f725aa3 24-84,152-166,168-169,179-180,183,198-199
+.github/workflows/update-homebrew.yml
+  377ce7eb4f725aa3 80
+web/vercel.json
+  377ce7eb4f725aa3 1-4
+.github/review-bot-rules/swift-blocking-runtime.md
+  377ce7eb4f725aa3 1-27
+web/app/sitemap.ts
+  377ce7eb4f725aa3 22,25-26,29-32
+tests/test_terminal_focus_routing.py
+  377ce7eb4f725aa3 24
+web/app/api/vm/route.ts
+  377ce7eb4f725aa3 1-256
+web/messages/de.json
+  377ce7eb4f725aa3 308,314-319,321-323,325-355,376,403-404,647-689,703,710-743
+web/messages/it.json
+  377ce7eb4f725aa3 308,314-318,321-323,325-355,376,378,403-404,647-689,703,710-743
+tests/test_nested_split_preserves_existing_split.py
+  377ce7eb4f725aa3 27
+web/app/[locale]/docs/keyboard-shortcuts/page.tsx
+  377ce7eb4f725aa3 14-16,47
+tests_v2/test_terminal_notification_rendering.py
+  377ce7eb4f725aa3 1-215
+web/app/[locale]/docs/custom-commands/page.tsx
+  377ce7eb4f725aa3 1,8-39,62-65,68,72-86,90-95,97-139,142,145-250,252-303,307-314,331-335,387-390,396-399,408-410,419-425,430-433,438-477
+.coderabbit.yaml
+  377ce7eb4f725aa3 1-59
+web/tests/db-config.test.ts
+  377ce7eb4f725aa3 1-107
+tests/test_codex_hook_agent_ports.py
+  377ce7eb4f725aa3 6,206,218,221,230,278,308-309,318-319,414
+tests_v2/test_command_palette_switcher_surface_precedence.py
+  377ce7eb4f725aa3 19
+tests_v2/test_ssh_remote_shortcuts_stay_remote.py
+  377ce7eb4f725aa3 20
+web/scripts/cloud-vm/verify-migration-preflight.sh
+  377ce7eb4f725aa3 1-124
+tests_v2/test_cli_id_format_defaults.py
+  377ce7eb4f725aa3 16
+scripts/perf-activation-session.py
+  377ce7eb4f725aa3 1-690
+tests/test_cmd_option_t_close_other_tabs_in_pane.py
+  377ce7eb4f725aa3 19
+web/messages/es.json
+  377ce7eb4f725aa3 308,314-319,321-322,325-355,376,403-404,647-689,703,710-743
+daemon/remote/cmd/cmuxd-remote/main.go
+  377ce7eb4f725aa3 6,51-55,72,132-136,140-141,144-159,177
+web/app/[locale]/docs/dock/page.tsx
+  377ce7eb4f725aa3 1-130
+web/app/handler/after-sign-in/page.tsx
+  377ce7eb4f725aa3 1-139
+scripts/release-pretag-guard.sh
+  377ce7eb4f725aa3 1-8
+scripts/ensure-ghosttykit.sh
+  377ce7eb4f725aa3 26-42,106-107,126-203,216-217
+.github/review-bot-rules/swift-logging.md
+  377ce7eb4f725aa3 1-34
+web/package.json
+  377ce7eb4f725aa3 7,9-23,25,29-36,39-44,48-49,57-59,65,68-70
+scripts/download-prebuilt-ghosttykit.sh
+  377ce7eb4f725aa3 24-26,54-60,62-63,67,70,78-80,82
+tests_v2/test_ssh_remote_browser_move_rebinds_proxy.py
+  377ce7eb4f725aa3 19
+web/db/migrations/20260427002930_narrow_onslaught/migration.sql
+  377ce7eb4f725aa3 1-6
+web/messages/pl.json
+  377ce7eb4f725aa3 308,314-319,321-322,325-355,376,403-404,647-689,703,710-743
+.github/workflows/release.yml
+  377ce7eb4f725aa3 23,27-29,32,36-38,42-45,136,144,147,257-289,300-303,389,400
+dogfood/directory-actions/.cmux/cmux.json
+  377ce7eb4f725aa3 1-31
+.circleci/config.yml
+  377ce7eb4f725aa3 1-353
+dogfood/directory-actions/legacy/prefer-dot-cmux/cmux.json
+  377ce7eb4f725aa3 1-27
+dogfood/directory-actions/many-tab-actions/.cmux/cmux.json
+  377ce7eb4f725aa3 1-254
+scripts/frame-probe-tui.py
+  377ce7eb4f725aa3 1-487
+.github/review-bot-rules/swift-file-package-boundaries.md
+  377ce7eb4f725aa3 1-34
+tests/test_cli_socket_operation_deadline.py
+  377ce7eb4f725aa3 1-243
+tests/test_opencode_plugin_install.py
+  377ce7eb4f725aa3 1-261
+.github/review-bot-rules/swift-actor-isolation.md
+  377ce7eb4f725aa3 1-28
+tests_v2/test_new_tab_interactive_after_splits.py
+  377ce7eb4f725aa3 27
+tests_v2/test_command_palette_navigation_keys.py
+  377ce7eb4f725aa3 19
+tests_v2/test_nested_split_no_detach_during_update.py
+  377ce7eb4f725aa3 29
+web/app/[locale]/components/docs-nav-items.ts
+  377ce7eb4f725aa3 19,23
+web/tests/drizzle-effect.test.ts
+  377ce7eb4f725aa3 1-86
+scripts/sign-cmux-bundle.sh
+  377ce7eb4f725aa3 1-116
+tests_v2/test_ssh_remote_proxy_bind_conflict.py
+  377ce7eb4f725aa3 21
+web/app/api/feedback/route.ts
+  377ce7eb4f725aa3 7,50-52,54-192,219
+web/scripts/db-local.sh
+  377ce7eb4f725aa3 1-144
+web/scripts/cloud-vm/projects.mjs
+  377ce7eb4f725aa3 1-202
+web/tests/db-schema.test.ts
+  377ce7eb4f725aa3 1-94
+web/app/lib/agent-page-canonical-fetch.ts
+  377ce7eb4f725aa3 1-52
+scripts/reloads.sh
+  377ce7eb4f725aa3 202-203,207-208,215-216,263
+.github/workflows/build-ghosttykit.yml
+  377ce7eb4f725aa3 4,16,62,93-94
+tests/test_cli_contract_help.py
+  377ce7eb4f725aa3 1-223
+.github/review-bot-rules/swift-concurrent-annotation.md
+  377ce7eb4f725aa3 1-22
+tests_v2/test_visual_typing_char_by_char.py
+  377ce7eb4f725aa3 21
+web/db/migrations/20260425092120_worried_supernaut/migration.sql
+  377ce7eb4f725aa3 1-10
+tests/test_visual_typing_char_by_char.py
+  377ce7eb4f725aa3 21
+tests/test_open_wrapper.py
+  377ce7eb4f725aa3 34,78-84,157-161,231-247,601
+tests_v2/test_cli_global_flags_and_v1_error_contract.py
+  377ce7eb4f725aa3 16-18,62-107
+tests_v2/test_cli_new_workspace_external_git_branch_refresh.py
+  377ce7eb4f725aa3 21,23,25
+tests_v2/test_browser_api_extended_families.py
+  377ce7eb4f725aa3 19
+tests_v2/test_ssh_remote_last_surface_clears_remote_state.py
+  377ce7eb4f725aa3 19
+tests_v2/test_browser_devtools_visibility_stability.py
+  377ce7eb4f725aa3 13
+web/app/[locale]/page.tsx
+  377ce7eb4f725aa3 44-51
+web/db/config.ts
+  377ce7eb4f725aa3 1-128
+web/services/vms/workflows.ts
+  377ce7eb4f725aa3 1-491
+.github/workflows/test-e2e.yml
+  377ce7eb4f725aa3 39,110-115,179,343
+web/tests/vm-db-read-model.test.ts
+  377ce7eb4f725aa3 1-99
+daemon/remote/cmd/cmuxd-remote/tmux_compat_test.go
+  377ce7eb4f725aa3 309
+docs/feed.md
+  377ce7eb4f725aa3 1-150
+web/app/api/vm/[id]/attach-endpoint/route.ts
+  377ce7eb4f725aa3 1-52
+scripts/launch-tagged-automation.sh
+  377ce7eb4f725aa3 139,154
+web/db/client.ts
+  377ce7eb4f725aa3 1-81
+web/services/vms/images/manifest.json
+  377ce7eb4f725aa3 1-53
+web/tests/vm-route-auth.test.ts
+  377ce7eb4f725aa3 1-612
+tests_v2/test_browser_open_split_reuse_policy.py
+  377ce7eb4f725aa3 12
+tests_v2/test_browser_file_url_load.py
+  377ce7eb4f725aa3 14
+tests/test_terminal_drop_overlay_animation_probe.py
+  377ce7eb4f725aa3 19
+web/tests/agent-page-variants.test.ts
+  377ce7eb4f725aa3 1-370
+web/services/vms/drivers/e2b.ts
+  377ce7eb4f725aa3 1-324
+web/types/turndown-plugin-gfm.d.ts
+  377ce7eb4f725aa3 1-8
+web/.gitignore
+  377ce7eb4f725aa3 22,36
+.github/workflows/claude.yml
+  377ce7eb4f725aa3 29
+tests_v2/test_command_palette_fuzzy_ranking.py
+  377ce7eb4f725aa3 20
+web/services/vms/drivers/freestyle.ts
+  377ce7eb4f725aa3 1-540
+tests/test_ci_swift_warning_budget.sh
+  377ce7eb4f725aa3 1-114
+.github/review-bot-rules/swift-architectural-rethink.md
+  377ce7eb4f725aa3 1-20
+tests/test_nested_split_panel_routing.py
+  377ce7eb4f725aa3 26
+tests/test_issue_464_cmdw_close_terminal_browser_split.py
+  377ce7eb4f725aa3 29
+tests_v2/test_ssh_remote_shell_integration.py
+  377ce7eb4f725aa3 23
+tests_v2/test_windows_api.py
+  377ce7eb4f725aa3 20
+tests_v2/test_command_palette_focus_lock_workspace_spawn.py
+  377ce7eb4f725aa3 18
+dogfood/directory-actions/legacy/cmux.json
+  377ce7eb4f725aa3 1-31
+web/app/env.ts
+  377ce7eb4f725aa3 4-24,30-34,37-51,53
+tests_v2/test_ssh_remote_cli_metadata.py
+  377ce7eb4f725aa3 20
+web/app/lib/agent-page-redirects.ts
+  377ce7eb4f725aa3 1-24
+tests_v2/test_read_screen_capture_pane_parity.py
+  377ce7eb4f725aa3 17
+tests_v2/test_workspace_create_background_starts_terminal.py
+  377ce7eb4f725aa3 17
+tests_v2/test_cli_new_workspace_background_metadata.py
+  377ce7eb4f725aa3 19
+tests_v2/test_cli_non_focus_commands_preserve_workspace.py
+  377ce7eb4f725aa3 15
+web/app/lib/agent-page-paths.ts
+  377ce7eb4f725aa3 1-247
+web/app/lib/stack.ts
+  377ce7eb4f725aa3 1-34
+web/messages/bs.json
+  377ce7eb4f725aa3 308,314-318,321-322,325-355,376,403-404,647-689,703,710-743
+web/services/vms/auth.ts
+  377ce7eb4f725aa3 1-140
+web/tests/vm-image-resolver.test.ts
+  377ce7eb4f725aa3 1-65
+web/services/vms/drivers/types.ts
+  377ce7eb4f725aa3 1-120
+scripts/probe-pure-prompt-duplication.py
+  377ce7eb4f725aa3 111
+.github/workflows/test-depot.yml
+  377ce7eb4f725aa3 35
+tests/test_new_tab_interactive_after_splits.py
+  377ce7eb4f725aa3 22
+tests_v2/test_command_palette_backspace_go_back.py
+  377ce7eb4f725aa3 19
+scripts/bench-window-visibility.swift
+  377ce7eb4f725aa3 1-660
+tests_v2/test_surface_list_custom_titles.py
+  377ce7eb4f725aa3 18
+tests_v2/test_command_palette_rename_select_all.py
+  377ce7eb4f725aa3 19
+tests_v2/test_workspace_create_initial_env.py
+  377ce7eb4f725aa3 14
+web/db/schema.ts
+  377ce7eb4f725aa3 1-103
+.github/swift-warning-budget.tsv
+  377ce7eb4f725aa3 1-113
+web/messages/ja.json
+  377ce7eb4f725aa3 274-275,302-304,312-313,318-323,325-326,328-359,380,407-408,412,414-415,419,659-701,857,864-897
+tests_v2/test_command_palette_switcher_cross_workspace_surface_focus.py
+  377ce7eb4f725aa3 19
+tests_v2/test_ssh_remote_resize_scrollback_regression.py
+  377ce7eb4f725aa3 20
+dogfood/directory-actions/legacy/icons/legacy-terminal.svg
+  377ce7eb4f725aa3 1-5
+tests_v2/test_rename_window_workspace_parity.py
+  377ce7eb4f725aa3 16
+.github/review-bot-rules/swiftui-state-layout.md
+  377ce7eb4f725aa3 1-23
+web/services/telemetry.ts
+  377ce7eb4f725aa3 1-102
+web/app/api/github-stars/route.ts
+  377ce7eb4f725aa3 2,6-20,22-24,26-28,30-40,42-43
+tests/test_new_tab_render_after_splits.py
+  377ce7eb4f725aa3 28
+web/services/vms/images/resolver.ts
+  377ce7eb4f725aa3 1-123
+web/tests/vm-billing-gateway.test.ts
+  377ce7eb4f725aa3 1-177
+tests_v2/test_nested_split_does_not_disappear.py
+  377ce7eb4f725aa3 28
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "c2f999dfe31b76bf62639defe90e777460d19d38",
+  "prompts": {
+    "377ce7eb4f725aa3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0e9dfdc2-c752-4fe0-a64d-1e0de83119a0",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Jingtao Xu",
+      "messages": [],
+      "total_additions": 581568,
+      "total_deletions": 150663,
+      "accepted_lines": 432547,
+      "overriden_lines": 0
+    }
+  }
+}
