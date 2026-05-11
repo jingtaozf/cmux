@@ -1,0 +1,19 @@
+CLI/cmux.swift
+  s_54e96aa1b93801::t_444d6aa16691c8 9681-9682,9684,9687-9690,9715-9717
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.4",
+  "base_commit_sha": "adff8263200814dccd647f18c1ac33e1d27eb7aa",
+  "prompts": {},
+  "sessions": {
+    "s_54e96aa1b93801": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "91626cd2-b5a3-45f6-b700-81aab154137d",
+        "model": "mimo-v2.5-pro"
+      },
+      "human_author": "Jingtao Xu <jingtaozf@gmail.com>"
+    }
+  }
+}
