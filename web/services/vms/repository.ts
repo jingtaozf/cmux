@@ -3,20 +3,35 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { cloudDb } from "../../db/client";
-import { cloudVmLeases, cloudVms, cloudVmUsageEvents } from "../../db/schema";
+import { cloudVmBillingGrants, cloudVmLeases, cloudVms, cloudVmUsageEvents } from "../../db/schema";
 import type { ProviderId } from "./drivers";
 import { VmDatabaseError, VmLimitExceededError, isVmLimitExceededError } from "./errors";
 
 export type CloudVmRow = typeof cloudVms.$inferSelect;
 export type CloudVmLeaseRow = typeof cloudVmLeases.$inferSelect;
 export type CloudVmLeaseKind = typeof cloudVmLeases.$inferInsert.kind;
+export type CloudVmStatus = CloudVmRow["status"];
 
 export type BeginCreateResult =
   | { readonly inserted: true; readonly vm: CloudVmRow }
   | { readonly inserted: false; readonly vm: CloudVmRow };
 
+export type BillingGrantClaim =
+  | { readonly kind: "inserted"; readonly grantId: string }
+  | { readonly kind: "already_claimed" };
+
 export type VmRepositoryShape = {
   readonly listUserVms: (userId: string, billingTeamId?: string | null) => Effect.Effect<CloudVmRow[], VmDatabaseError>;
+  readonly claimBillingGrant: (input: {
+    readonly billingCustomerType: string;
+    readonly billingCustomerId: string;
+    readonly billingPlanId: string;
+    readonly itemId: string;
+    readonly amount: number;
+    readonly reason: string;
+  }) => Effect.Effect<BillingGrantClaim, VmDatabaseError>;
+  readonly markBillingGrantApplied: (id: string) => Effect.Effect<void, VmDatabaseError>;
+  readonly deleteBillingGrant: (id: string) => Effect.Effect<void, VmDatabaseError>;
   readonly beginCreate: (input: {
     readonly userId: string;
     readonly billingTeamId: string;
@@ -27,6 +42,15 @@ export type VmRepositoryShape = {
     readonly maxActiveVms: number;
     readonly idempotencyKey?: string;
   }) => Effect.Effect<BeginCreateResult, VmDatabaseError | VmLimitExceededError>;
+  readonly activeLimitCandidates: (input: {
+    readonly userId: string;
+    readonly billingTeamId: string;
+  }) => Effect.Effect<CloudVmRow[], VmDatabaseError>;
+  readonly markProviderObservedStatus: (input: {
+    readonly id: string;
+    readonly providerVmId: string;
+    readonly status: CloudVmStatus;
+  }) => Effect.Effect<void, VmDatabaseError>;
   readonly markCreateRunning: (input: {
     readonly id: string;
     readonly providerVmId: string;
@@ -118,6 +142,65 @@ export const VmRepositoryLive = Layer.succeed(VmRepository, {
         .orderBy(desc(cloudVms.createdAt));
     }),
 
+  claimBillingGrant: (input) =>
+    dbEffect("claimBillingGrant", async () => {
+      const db = cloudDb();
+      const [inserted] = await db
+        .insert(cloudVmBillingGrants)
+        .values({
+          billingCustomerType: input.billingCustomerType,
+          billingCustomerId: input.billingCustomerId,
+          billingPlanId: input.billingPlanId,
+          itemId: input.itemId,
+          amount: input.amount,
+          reason: input.reason,
+        })
+        .onConflictDoNothing({
+          target: [
+            cloudVmBillingGrants.billingCustomerType,
+            cloudVmBillingGrants.billingCustomerId,
+            cloudVmBillingGrants.itemId,
+            cloudVmBillingGrants.reason,
+          ],
+        })
+        .returning({ id: cloudVmBillingGrants.id });
+      if (inserted) {
+        return { kind: "inserted" as const, grantId: inserted.id };
+      }
+
+      const [existing] = await db
+        .select({ id: cloudVmBillingGrants.id })
+        .from(cloudVmBillingGrants)
+        .where(
+          and(
+            eq(cloudVmBillingGrants.billingCustomerType, input.billingCustomerType),
+            eq(cloudVmBillingGrants.billingCustomerId, input.billingCustomerId),
+            eq(cloudVmBillingGrants.itemId, input.itemId),
+            eq(cloudVmBillingGrants.reason, input.reason),
+          ),
+        )
+        .limit(1);
+      if (!existing) throw new Error("billing grant conflict row missing after insert");
+      return { kind: "already_claimed" as const };
+    }),
+
+  markBillingGrantApplied: (id) =>
+    dbEffect("markBillingGrantApplied", async () => {
+      const db = cloudDb();
+      await db
+        .update(cloudVmBillingGrants)
+        .set({ appliedAt: new Date(), updatedAt: new Date() })
+        .where(eq(cloudVmBillingGrants.id, id));
+    }),
+
+  deleteBillingGrant: (id) =>
+    dbEffect("deleteBillingGrant", async () => {
+      const db = cloudDb();
+      await db
+        .delete(cloudVmBillingGrants)
+        .where(and(eq(cloudVmBillingGrants.id, id), isNull(cloudVmBillingGrants.appliedAt)));
+    }),
+
   beginCreate: (input) =>
     Effect.tryPromise({
       try: async () => {
@@ -149,7 +232,7 @@ export const VmRepositoryLive = Layer.succeed(VmRepository, {
               .from(cloudVms)
               .where(
                 and(
-                  inArray(cloudVms.status, ["provisioning", "running", "paused"]),
+                  inArray(cloudVms.status, ["provisioning", "running"]),
                   or(
                     eq(cloudVms.billingTeamId, input.billingTeamId),
                     and(isNull(cloudVms.billingTeamId), eq(cloudVms.userId, input.userId)),
@@ -192,6 +275,43 @@ export const VmRepositoryLive = Layer.succeed(VmRepository, {
       catch: (cause) => isVmLimitExceededError(cause)
         ? cause
         : new VmDatabaseError({ operation: "beginCreate", cause }),
+    }),
+
+  activeLimitCandidates: (input) =>
+    dbEffect("activeLimitCandidates", async () => {
+      const db = cloudDb();
+      return await db
+        .select()
+        .from(cloudVms)
+        .where(
+          and(
+            eq(cloudVms.status, "running"),
+            isNotNull(cloudVms.providerVmId),
+            or(
+              eq(cloudVms.billingTeamId, input.billingTeamId),
+              and(isNull(cloudVms.billingTeamId), eq(cloudVms.userId, input.userId)),
+            ),
+          ),
+        );
+    }),
+
+  markProviderObservedStatus: (input) =>
+    dbEffect("markProviderObservedStatus", async () => {
+      const db = cloudDb();
+      await db
+        .update(cloudVms)
+        .set({
+          status: input.status,
+          destroyedAt: input.status === "destroyed" ? new Date() : null,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(cloudVms.id, input.id),
+            eq(cloudVms.providerVmId, input.providerVmId),
+            ne(cloudVms.status, "destroyed"),
+          ),
+        );
     }),
 
   markCreateRunning: (input) =>

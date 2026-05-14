@@ -29,6 +29,12 @@ public enum AgentLaunchSanitizer {
             }
             guard let preserved = preservedArguments(kind: "claude", args: tail) else { return nil }
             return [executable, "claude-teams"] + preserved
+        case "codexTeams":
+            if tail.first == "codex-teams" {
+                tail.removeFirst()
+            }
+            guard let preserved = preservedArguments(kind: "codex", args: tail) else { return nil }
+            return [executable, "codex-teams"] + preserved
         case "omo":
             if tail.first == "omo" {
                 tail.removeFirst()
@@ -57,6 +63,26 @@ public enum AgentLaunchSanitizer {
             return preserveOptions(args, policy: claudePolicy)
         case "codex":
             return preserveOptions(args, policy: codexPolicy)
+        case "pi":
+            return preserveOptions(args, policy: piPolicy)
+        case "amp":
+            // Strip the `threads continue <id>` resume sub-subcommand if the
+            // captured launch already started by resuming a thread, so we
+            // don't double-add it. Supports the documented short aliases:
+            // `t`/`thread` for `threads`, and `c` for `continue`.
+            var tail = args
+            let threadsAliases: Set<String> = ["threads", "thread", "t"]
+            let continueAliases: Set<String> = ["continue", "c"]
+            if let first = tail.first, threadsAliases.contains(first) {
+                tail.removeFirst()
+                if let next = tail.first, continueAliases.contains(next) {
+                    tail.removeFirst()
+                    if let candidate = tail.first, !candidate.hasPrefix("-") {
+                        tail.removeFirst()
+                    }
+                }
+            }
+            return preserveOptions(tail, policy: ampPolicy)
         case "cursor":
             var tail = args
             if tail.first == "agent" {
@@ -81,6 +107,15 @@ public enum AgentLaunchSanitizer {
                 return nil
             }
             return preserveOptions(tail, policy: rovoDevPolicy)
+        case "hermes-agent":
+            var tail = args
+            if tail.first == "chat" {
+                tail.removeFirst()
+            } else if let command = tail.first,
+                      !command.hasPrefix("-") {
+                return nil
+            }
+            return preserveOptions(tail, policy: hermesAgentPolicy)
         case "copilot":
             return preserveOptions(args, policy: copilotPolicy)
         case "codebuddy":

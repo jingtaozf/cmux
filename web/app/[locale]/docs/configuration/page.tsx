@@ -56,11 +56,14 @@ const settingsFileExample = `{
   //   "appearance": "dark",
   //   "menuBarOnly": false,
   //   "newWorkspacePlacement": "afterCurrent",
+  //   "openSupportedFilesInCmux": true,
+  //   "workspaceInheritWorkingDirectory": true,
   //   "iMessageMode": true
   // },
 
   // "terminal": {
-  //   "showScrollBar": false
+  //   "showScrollBar": false,
+  //   "autoResumeAgentSessions": true
   // },
 
   // "browser": {
@@ -79,6 +82,7 @@ const settingsFileExample = `{
   // "shortcuts": {
   //   "bindings": {
   //     "toggleSidebar": "cmd+b",
+  //     "toggleFileExplorer": "cmd+opt+b",
   //     "newTab": ["ctrl+b", "c"],
   //     "commandPalettePrevious": null
   //   }
@@ -275,8 +279,8 @@ working-directory = ~/code`}</CodeBlock>
         <strong>Precedence:</strong> global <code>~/.config/cmux/cmux.json</code> settings override
         values saved in the Settings window. Legacy <code>~/.config/cmux/settings.json</code> and
         Application Support settings files are read only as fallback for missing settings keys.
-        Project-local <code>.cmux/cmux.json</code> can override actions, commands, and UI action
-        wiring, but not global app preferences.
+        Project-local <code>.cmux/cmux.json</code> can override actions, commands, UI action
+        wiring, and notification hooks, but not global app preferences.
       </Callout>
       <Callout type="info">
         <strong>Reload:</strong> edit the file, then use <code>Cmd+Shift+,</code> or{" "}
