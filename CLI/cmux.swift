@@ -55,6 +55,7 @@ private final class CLISocketSentryTelemetry {
     private let subcommand: String
     private let socketPath: String
     private let envSocketPath: String?
+    private let processEnv: [String: String]
     private let workspaceId: String?
     private let surfaceId: String?
     private let disabledByEnv: Bool
@@ -108,58 +109,13 @@ private final class CLISocketSentryTelemetry {
             return Bundle.main
         }
 
-        guard let executableURL = currentExecutableURL() else {
-            return Bundle.main
-        }
-
-        var current = executableURL.deletingLastPathComponent().standardizedFileURL
-        while true {
-            if current.pathExtension == "app", let bundle = Bundle(url: current) {
-                return bundle
-            }
-
-            if current.lastPathComponent == "Contents" {
-                let appURL = current.deletingLastPathComponent().standardizedFileURL
-                if appURL.pathExtension == "app", let bundle = Bundle(url: appURL) {
-                    return bundle
-                }
-            }
-
-            guard let parent = parentSearchURL(for: current) else {
-                break
-            }
-            current = parent
+        if let bundle = CLIExecutableLocator.enclosingAppBundle() {
+            return bundle
         }
 
         return Bundle.main
     }
 
-    private static func currentExecutableURL() -> URL? {
-        var size: UInt32 = 0
-        _ = _NSGetExecutablePath(nil, &size)
-        if size > 0 {
-            var buffer = Array<CChar>(repeating: 0, count: Int(size))
-            if _NSGetExecutablePath(&buffer, &size) == 0 {
-                return URL(fileURLWithPath: String(cString: buffer)).standardizedFileURL
-            }
-        }
-
-        return Bundle.main.executableURL?.standardizedFileURL
-    }
-
-    private static func parentSearchURL(for url: URL) -> URL? {
-        let standardized = url.standardizedFileURL
-        let path = standardized.path
-        guard !path.isEmpty, path != "/" else {
-            return nil
-        }
-
-        let parent = standardized.deletingLastPathComponent().standardizedFileURL
-        guard parent.path != path else {
-            return nil
-        }
-        return parent
-    }
 #endif
 
     init(command: String, commandArgs: [String], socketPath: String, processEnv: [String: String]) {
@@ -167,6 +123,7 @@ private final class CLISocketSentryTelemetry {
         self.subcommand = commandArgs.first?.lowercased() ?? "help"
         self.socketPath = socketPath
         self.envSocketPath = CLISocketEnvironment.socketPathForTelemetry(in: processEnv)
+        self.processEnv = processEnv
         self.workspaceId = processEnv["CMUX_WORKSPACE_ID"]
         self.surfaceId = processEnv["CMUX_SURFACE_ID"]
         self.disabledByEnv =
@@ -274,7 +231,11 @@ private final class CLISocketSentryTelemetry {
             context["tmp_cmux_sockets"] = tmpSockets
         }
         let taggedSockets = tmpSockets.filter { $0 != CLISocketPathResolver.legacyDefaultSocketPath }
-        if CLISocketPathResolver.isImplicitDefaultPath(socketPath),
+        if CLISocketPathResolver.isImplicitDefaultPath(
+            socketPath,
+            bundleIdentifier: CLISocketPathResolver.currentAppBundleIdentifier(),
+            environment: processEnv
+        ),
            (envSocketPath?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true),
            !taggedSockets.isEmpty {
             context["possible_root_cause"] = "CMUX_SOCKET_PATH missing while tagged sockets exist"
@@ -377,6 +338,88 @@ private struct ClaudeHookParsedInput {
     let transcriptPath: String?
 }
 
+private enum AgentHookNotificationStatus: String, Codable {
+    case idle
+    case needsInput
+    case error
+}
+
+private enum AgentHookRuntimeStatus: String, Codable {
+    case running
+    case idle
+    case needsInput
+    case error
+}
+
+private struct AgentHookNotificationSummary {
+    let subtitle: String
+    let body: String
+    let status: AgentHookNotificationStatus?
+    let isFallback: Bool
+}
+
+#if DEBUG
+private func agentHookDebugLog(
+    _ message: @autoclosure () -> String,
+    socketPath: String? = nil,
+    env: [String: String] = ProcessInfo.processInfo.environment
+) {
+    let logPath = agentHookDebugLogPath(socketPath: socketPath, env: env)
+    let timestamp = String(format: "%.3f", Date().timeIntervalSince1970)
+    let line = "\(timestamp) \(message())\n"
+    guard let data = line.data(using: .utf8) else { return }
+
+    if let handle = FileHandle(forWritingAtPath: logPath) {
+        defer { try? handle.close() }
+        guard (try? handle.seekToEnd()) != nil else { return }
+        try? handle.write(contentsOf: data)
+    } else {
+        FileManager.default.createFile(atPath: logPath, contents: data)
+    }
+}
+
+private func agentHookDebugLogPath(socketPath: String?, env: [String: String]) -> String {
+    if let explicit = agentHookDebugNonEmpty(env["CMUX_DEBUG_LOG"]) {
+        return NSString(string: explicit).expandingTildeInPath
+    }
+
+    if let socketPath {
+        let socketName = URL(fileURLWithPath: socketPath).lastPathComponent
+        if socketName.hasPrefix("cmux-debug-"), socketName.hasSuffix(".sock") {
+            let logName = String(socketName.dropLast(".sock".count)) + ".log"
+            return URL(fileURLWithPath: "/tmp", isDirectory: true)
+                .appendingPathComponent(logName, isDirectory: false)
+                .path
+        }
+    }
+
+    if let lastPath = try? String(contentsOfFile: "/tmp/cmux-last-debug-log-path", encoding: .utf8),
+       let normalized = agentHookDebugNonEmpty(lastPath) {
+        return NSString(string: normalized).expandingTildeInPath
+    }
+
+    return "/tmp/cmux-debug.log"
+}
+
+private func agentHookDebugNonEmpty(_ value: String?) -> String? {
+    guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+          !trimmed.isEmpty else {
+        return nil
+    }
+    return trimmed
+}
+
+private func agentHookDebugShort(_ value: String?) -> String {
+    guard let value = agentHookDebugNonEmpty(value) else { return "nil" }
+    return String(value.prefix(12))
+}
+
+private func agentHookDebugSocketName(_ socketPath: String?) -> String {
+    guard let socketPath = agentHookDebugNonEmpty(socketPath) else { return "nil" }
+    return URL(fileURLWithPath: socketPath).lastPathComponent
+}
+#endif
+
 private struct ClaudeHookSessionRecord: Codable {
     var sessionId: String
     var workspaceId: String
@@ -388,6 +431,10 @@ private struct ClaudeHookSessionRecord: Codable {
     var isRestorable: Bool?
     var lastSubtitle: String?
     var lastBody: String?
+    var lastNotificationStatus: AgentHookNotificationStatus?
+    var lastEmittedNotificationFingerprint: String?
+    var lastEmittedNotificationAt: TimeInterval?
+    var runtimeStatus: AgentHookRuntimeStatus?
     var startedAt: TimeInterval
     var updatedAt: TimeInterval
 }
@@ -490,6 +537,10 @@ private final class ClaudeHookSessionStore {
         isRestorable: Bool? = nil,
         lastSubtitle: String? = nil,
         lastBody: String? = nil,
+        lastNotificationStatus: AgentHookNotificationStatus? = nil,
+        updateLastNotificationStatus: Bool = false,
+        runtimeStatus: AgentHookRuntimeStatus? = nil,
+        updateRuntimeStatus: Bool = false,
         markActive: Bool = false,
         turnId: String? = nil,
         allowsNewSessionReplacement: Bool = false
@@ -509,6 +560,10 @@ private final class ClaudeHookSessionStore {
                 isRestorable: nil,
                 lastSubtitle: nil,
                 lastBody: nil,
+                lastNotificationStatus: nil,
+                lastEmittedNotificationFingerprint: nil,
+                lastEmittedNotificationAt: nil,
+                runtimeStatus: nil,
                 startedAt: now,
                 updatedAt: now
             )
@@ -539,6 +594,12 @@ private final class ClaudeHookSessionStore {
             if let body = normalizeOptional(lastBody) {
                 record.lastBody = body
             }
+            if updateLastNotificationStatus {
+                record.lastNotificationStatus = lastNotificationStatus
+            }
+            if updateRuntimeStatus {
+                record.runtimeStatus = runtimeStatus
+            }
             record.updatedAt = now
             state.sessions[normalized] = record
             if markActive, let normalizedWorkspace = normalizeOptional(workspaceId) {
@@ -548,6 +609,67 @@ private final class ClaudeHookSessionStore {
                     allowsNewSessionReplacement: allowsNewSessionReplacement ? true : nil,
                     updatedAt: now
                 )
+            }
+        }
+    }
+
+    func clearNotificationEmission(sessionId: String) throws {
+        let normalized = normalizeSessionId(sessionId)
+        guard !normalized.isEmpty else { return }
+        try withLockedState { state in
+            guard var record = state.sessions[normalized] else { return }
+            let now = Date().timeIntervalSince1970
+            record.lastEmittedNotificationFingerprint = nil
+            record.lastEmittedNotificationAt = nil
+            record.updatedAt = now
+            state.sessions[normalized] = record
+        }
+    }
+
+    func recentlyEmittedNotification(
+        sessionId: String,
+        fingerprint: String,
+        within interval: TimeInterval = 60 * 60
+    ) throws -> Bool {
+        let normalized = normalizeSessionId(sessionId)
+        guard !normalized.isEmpty else { return false }
+        let normalizedFingerprint = fingerprint.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedFingerprint.isEmpty else { return false }
+        return try withLockedState { state in
+            guard let record = state.sessions[normalized],
+                  record.lastEmittedNotificationFingerprint == normalizedFingerprint,
+                  let emittedAt = record.lastEmittedNotificationAt else {
+                return false
+            }
+            return Date().timeIntervalSince1970 - emittedAt <= interval
+        }
+    }
+
+    func markNotificationEmitted(sessionId: String, fingerprint: String) throws {
+        let normalized = normalizeSessionId(sessionId)
+        guard !normalized.isEmpty else { return }
+        let normalizedFingerprint = fingerprint.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedFingerprint.isEmpty else { return }
+        try withLockedState { state in
+            guard var record = state.sessions[normalized] else { return }
+            let now = Date().timeIntervalSince1970
+            record.lastEmittedNotificationFingerprint = normalizedFingerprint
+            record.lastEmittedNotificationAt = now
+            record.updatedAt = now
+            state.sessions[normalized] = record
+        }
+    }
+
+    func hasRunningSession(workspaceId: String, excludingSessionId: String?) throws -> Bool {
+        guard let normalizedWorkspace = normalizeOptional(workspaceId) else {
+            return false
+        }
+        let excluded = normalizeOptional(excludingSessionId)
+        return try withLockedState { state in
+            state.sessions.values.contains { record in
+                normalizeOptional(record.workspaceId) == normalizedWorkspace
+                    && record.sessionId != excluded
+                    && record.runtimeStatus == .running
             }
         }
     }
@@ -743,7 +865,7 @@ private final class ClaudeHookSessionStore {
     }
 }
 
-private let codexHookWrapperProcessNames: Set<String> = [
+private let agentHookWrapperProcessNames: Set<String> = [
     "sh",
     "bash",
     "zsh",
@@ -766,7 +888,7 @@ enum CLIIDFormat: String {
 
 private enum TopSortKey: Equatable {
     case cpu
-    case rss
+    case memory
     case proc
 }
 
@@ -900,196 +1022,19 @@ enum SocketPasswordResolver {
     }
 }
 
-private enum CLISocketPathSource {
-    case explicitFlag
-    case environment
-    case implicitDefault
-}
-
-private enum CLISocketPathResolver {
-    private static let appSupportDirectoryName = "cmux"
-    private static let stableSocketFileName = "cmux.sock"
-    private static let lastSocketPathFileName = "last-socket-path"
-    static let legacyDefaultSocketPath = "/tmp/cmux.sock"
-    private static let fallbackSocketPath = "/tmp/cmux-debug.sock"
-    private static let stagingSocketPath = "/tmp/cmux-staging.sock"
-    private static let legacyLastSocketPathFile = "/tmp/cmux-last-socket-path"
-
-    static var defaultSocketPath: String {
-        let stablePath: String? = stableSocketDirectoryURL()?
-            .appendingPathComponent(stableSocketFileName, isDirectory: false)
-            .path
-        return stablePath ?? legacyDefaultSocketPath
-    }
-
-    static func isImplicitDefaultPath(_ path: String) -> Bool {
-        path == defaultSocketPath || path == legacyDefaultSocketPath
-    }
-
-    static func resolve(
-        requestedPath: String,
-        source: CLISocketPathSource,
-        environment: [String: String] = ProcessInfo.processInfo.environment
-    ) -> String {
-        guard source == .implicitDefault else {
-            return requestedPath
-        }
-
-        let candidates = dedupe(candidatePaths(requestedPath: requestedPath, environment: environment))
-
-        // Prefer sockets that are currently accepting connections.
-        for path in candidates where canConnect(to: path) {
-            return path
-        }
-
-        // If the listener is still starting, prefer existing socket files.
-        for path in candidates where isSocketFile(path) {
-            return path
-        }
-
-        return requestedPath
-    }
-
-    private static func candidatePaths(requestedPath: String, environment: [String: String]) -> [String] {
-        var candidates: [String] = []
-
-        if let tag = normalized(environment["CMUX_TAG"]) {
-            let slug = sanitizeTagSlug(tag)
-            candidates.append("/tmp/cmux-debug-\(slug).sock")
-            candidates.append("/tmp/cmux-\(slug).sock")
-        }
-
-        candidates.append(requestedPath)
-        candidates.append(defaultSocketPath)
-        candidates.append(legacyDefaultSocketPath)
-        candidates.append(fallbackSocketPath)
-        candidates.append(stagingSocketPath)
-        candidates.append(contentsOf: discoverTaggedSockets(limit: 12))
-        if let last = readLastSocketPath() {
-            candidates.append(last)
-        }
-        return candidates
-    }
-
-    private static func readLastSocketPath() -> String? {
-        let primaryCandidate: String? = stableSocketDirectoryURL()?
-            .appendingPathComponent(lastSocketPathFileName, isDirectory: false)
-            .path
-        let candidates = [primaryCandidate, legacyLastSocketPathFile].compactMap { $0 }
-
-        for candidate in candidates {
-            guard let data = try? String(contentsOfFile: candidate, encoding: .utf8) else {
-                continue
-            }
-            if let value = normalized(data) {
-                return value
-            }
-        }
-        return nil
-    }
-
-    private static func discoverTaggedSockets(limit: Int) -> [String] {
-        var discovered: [(path: String, mtime: TimeInterval)] = []
-        for directory in socketDiscoveryDirectories() {
-            guard let entries = try? FileManager.default.contentsOfDirectory(atPath: directory) else {
-                continue
-            }
-            discovered.reserveCapacity(min(limit, discovered.count + entries.count))
-            for name in entries where name.hasPrefix("cmux") && name.hasSuffix(".sock") {
-                let path = URL(fileURLWithPath: directory)
-                    .appendingPathComponent(name, isDirectory: false)
-                    .path
-                var st = stat()
-                guard lstat(path, &st) == 0 else { continue }
-                guard (st.st_mode & mode_t(S_IFMT)) == mode_t(S_IFSOCK) else { continue }
-                if path == defaultSocketPath || path == legacyDefaultSocketPath || path == fallbackSocketPath || path == stagingSocketPath {
-                    continue
-                }
-                let modified = TimeInterval(st.st_mtimespec.tv_sec) + TimeInterval(st.st_mtimespec.tv_nsec) / 1_000_000_000
-                discovered.append((path: path, mtime: modified))
-            }
-        }
-
-        discovered.sort { $0.mtime > $1.mtime }
-        return dedupe(discovered.prefix(limit).map(\.path))
-    }
-
-    private static func isSocketFile(_ path: String) -> Bool {
-        var st = stat()
-        return lstat(path, &st) == 0 && (st.st_mode & mode_t(S_IFMT)) == mode_t(S_IFSOCK)
-    }
-
-    private static func canConnect(to path: String) -> Bool {
-        guard isSocketFile(path) else { return false }
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else { return false }
-        defer { Darwin.close(fd) }
-
-        var addr = sockaddr_un()
-        addr.sun_family = sa_family_t(AF_UNIX)
-        let maxLength = MemoryLayout.size(ofValue: addr.sun_path)
-        path.withCString { ptr in
-            withUnsafeMutablePointer(to: &addr.sun_path) { pathPtr in
-                let buf = UnsafeMutableRawPointer(pathPtr).assumingMemoryBound(to: CChar.self)
-                strncpy(buf, ptr, maxLength - 1)
-            }
-        }
-
-        let result = withUnsafePointer(to: &addr) { ptr in
-            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPtr in
-                Darwin.connect(fd, sockaddrPtr, socklen_t(MemoryLayout<sockaddr_un>.size))
-            }
-        }
-        return result == 0
-    }
-
-    private static func sanitizeTagSlug(_ raw: String) -> String {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let slug = trimmed
-            .replacingOccurrences(of: "[^a-z0-9]+", with: "-", options: .regularExpression)
-            .replacingOccurrences(of: "-+", with: "-", options: .regularExpression)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-        return slug.isEmpty ? "agent" : slug
-    }
-
-    private static func normalized(_ value: String?) -> String? {
-        guard let value else { return nil }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
-    private static func stableSocketDirectoryURL() -> URL? {
-        guard let appSupportDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
-            return nil
-        }
-        return appSupportDirectory.appendingPathComponent(appSupportDirectoryName, isDirectory: true)
-    }
-
-    private static func socketDiscoveryDirectories() -> [String] {
-        let appSupportSocketDirectory: String = stableSocketDirectoryURL()?.path ?? ""
-        return dedupe([
-            "/tmp",
-            appSupportSocketDirectory,
-        ])
-    }
-
-    private static func dedupe(_ paths: [String]) -> [String] {
-        var seen: Set<String> = []
-        var ordered: [String] = []
-        ordered.reserveCapacity(paths.count)
-        for path in paths where !path.isEmpty {
-            if seen.insert(path).inserted {
-                ordered.append(path)
-            }
-        }
-        return ordered
-    }
-}
-
 final class SocketClient {
     private struct RelayEndpoint {
         let host: String
         let port: UInt16
+    }
+
+    private struct SocketConnectError: Error, CustomStringConvertible {
+        let path: String
+        let errnoValue: Int32
+
+        var description: String {
+            "Failed to connect to socket at \(path) (\(String(cString: strerror(errnoValue))), errno \(errnoValue))"
+        }
     }
 
     private struct RelayCredentials {
@@ -1104,6 +1049,8 @@ final class SocketClient {
     private static let defaultResponseTimeoutSeconds: TimeInterval = 15.0
     private static let multilineResponseIdleTimeoutSeconds: TimeInterval = 0.12
     private static let maxSocketTimeoutSeconds: TimeInterval = 9_007_199_254_740_991
+    private static let connectRetryDeadline: TimeInterval = 0.35
+    private static let connectRetryIntervalMicros: useconds_t = 25_000
     private static let responseTimeoutSeconds: TimeInterval = {
         let env = ProcessInfo.processInfo.environment
         if let raw = env["CMUXTERM_CLI_RESPONSE_TIMEOUT_SEC"],
@@ -1214,7 +1161,18 @@ final class SocketClient {
 
     func connect() throws {
         if socketFD >= 0 { return }
-        try connectOnce()
+        let deadline = Date().addingTimeInterval(Self.connectRetryDeadline)
+        while true {
+            do {
+                try connectOnce()
+                return
+            } catch {
+                guard Self.shouldRetryConnect(error), Date() < deadline else {
+                    throw error
+                }
+                usleep(Self.connectRetryIntervalMicros)
+            }
+        }
     }
 
     func close() {
@@ -1375,9 +1333,19 @@ final class SocketClient {
         let connectErrno = errno
         Darwin.close(socketFD)
         socketFD = -1
-        throw CLIError(
-            message: "Failed to connect to socket at \(path) (\(String(cString: strerror(connectErrno))), errno \(connectErrno))"
-        )
+        throw SocketConnectError(path: path, errnoValue: connectErrno)
+    }
+
+    private static func shouldRetryConnect(_ error: Error) -> Bool {
+        guard let error = error as? SocketConnectError else {
+            return false
+        }
+        switch error.errnoValue {
+        case ECONNREFUSED, EAGAIN, EWOULDBLOCK:
+            return true
+        default:
+            return false
+        }
     }
 
     private static func parseRelayEndpoint(_ raw: String) -> RelayEndpoint? {
@@ -1980,7 +1948,6 @@ final class SocketClient {
 struct CMUXCLI {
     let args: [String]
 
-    private static let debugLastSocketHintPath = "/tmp/cmux-last-socket-path"
     private static let vmCreateIdempotencyTTLSeconds: TimeInterval = 10 * 60
     private static let vmCreateResponseTimeoutSeconds: TimeInterval = 16 * 60
     private static let vmAttachResponseTimeoutSeconds: TimeInterval = 16 * 60
@@ -2126,84 +2093,11 @@ struct CMUXCLI {
         try? saveVMCreateIdempotencyStore(store, to: url)
     }
 
-    private static func pathIsSocket(_ path: String) -> Bool {
-        var st = stat()
-        guard lstat(path, &st) == 0 else { return false }
-        return (st.st_mode & S_IFMT) == S_IFSOCK
-    }
-
-    private static func debugSocketPathFromHintFile() -> String? {
-#if DEBUG
-        guard let raw = try? String(contentsOfFile: debugLastSocketHintPath, encoding: .utf8) else {
-            return nil
-        }
-        guard let hinted = normalizedEnvValue(raw),
-              hinted.hasPrefix("/tmp/cmux-debug"),
-              hinted.hasSuffix(".sock"),
-              pathIsSocket(hinted) else {
-            return nil
-        }
-        return hinted
-#else
-        return nil
-#endif
-    }
-
-    private static func defaultSocketPath(environment: [String: String]) -> String {
-        if let explicit = normalizedEnvValue(environment["CMUX_SOCKET_PATH"]) {
-            return explicit
-        }
-#if DEBUG
-        if let hinted = debugSocketPathFromHintFile() {
-            return hinted
-        }
-        return "/tmp/cmux-debug.sock"
-#else
-        return "/tmp/cmux.sock"
-#endif
-    }
-
     private static let browserDisabledDefaultsKey = "browserDisabledOverride"
     private static let defaultBrowserSettingsDomain = "com.cmuxterm.app"
 
-    private static func currentExecutableURL() -> URL? {
-        var size: UInt32 = 0
-        _ = _NSGetExecutablePath(nil, &size)
-        guard size > 0 else {
-            return Bundle.main.executableURL?.standardizedFileURL
-        }
-
-        var buffer = Array<CChar>(repeating: 0, count: Int(size))
-        guard _NSGetExecutablePath(&buffer, &size) == 0 else {
-            return Bundle.main.executableURL?.standardizedFileURL
-        }
-        return URL(fileURLWithPath: String(cString: buffer)).standardizedFileURL
-    }
-
     private static func containingAppBundleIdentifier() -> String? {
-        guard let executableURL = currentExecutableURL() else { return nil }
-        var current = executableURL.deletingLastPathComponent().standardizedFileURL
-        while current.path != "/" {
-            if current.pathExtension == "app",
-               let bundle = Bundle(url: current),
-               let bundleIdentifier = normalizedEnvValue(bundle.bundleIdentifier) {
-                return bundleIdentifier
-            }
-
-            if current.lastPathComponent == "Contents" {
-                let appURL = current.deletingLastPathComponent().standardizedFileURL
-                if appURL.pathExtension == "app",
-                   let bundle = Bundle(url: appURL),
-                   let bundleIdentifier = normalizedEnvValue(bundle.bundleIdentifier) {
-                    return bundleIdentifier
-                }
-            }
-
-            let parent = current.deletingLastPathComponent().standardizedFileURL
-            guard parent.path != current.path else { break }
-            current = parent
-        }
-        return nil
+        normalizedEnvValue(CLIExecutableLocator.enclosingAppBundle()?.bundleIdentifier)
     }
 
     private static func browserSettingsDomain(environment: [String: String]) -> String {
@@ -2218,14 +2112,14 @@ struct CMUXCLI {
         "--attr", "--before-workspace", "--body", "--color", "--command",
         "--config", "--cwd", "--description", "--direction", "--domain",
         "--dx", "--dy", "--email", "--event", "--expires", "--focus",
-        "--function", "--id", "--image", "--index", "--key", "--layout",
-        "--lines", "--load-state", "--max-depth", "--name", "--os",
+        "--function", "--id", "--image", "--index", "--key", "--kind",
+        "--layout", "--lines", "--load-state", "--max-depth", "--name", "--os",
         "--out", "--pane", "--panel", "--path", "--profile", "--property",
         "--provider", "--relay-port", "--script", "--selector", "--session",
-        "--source", "--subtitle", "--surface", "--tab", "--target-pane",
+        "--shell", "--source", "--subtitle", "--surface", "--tab", "--target-pane",
         "--text", "--timeout", "--timeout-ms", "--title", "--transcript",
         "--turn", "--type", "--url", "--url-contains", "--value", "--window",
-        "--workspace",
+        "--workspace", "--checkpoint", "--checkpoint-id",
     ]
 
     private func parsePresentationOptions(
@@ -2335,8 +2229,20 @@ struct CMUXCLI {
         }
     }
 
+    private static func shouldFocusWindowBeforeDispatch(command: String, commandArgs: [String]) -> Bool {
+        let normalizedCommand = command.lowercased()
+        if normalizedCommand == "surface-resume" {
+            return false
+        }
+        if normalizedCommand == "surface", commandArgs.first?.lowercased() == "resume" {
+            return false
+        }
+        return true
+    }
+
     func run() throws {
         let processEnv = ProcessInfo.processInfo.environment
+        let cliBundleIdentifier = CLISocketPathResolver.currentAppBundleIdentifier()
         var explicitSocketPath: String? = nil
         var jsonOutput = false
         var idFormatArg: String? = nil
@@ -2420,8 +2326,6 @@ struct CMUXCLI {
         // so help text is available even when cmux is not running.
         let preSeparatorArgs = commandArgs.firstIndex(of: "--").map { commandArgs[..<$0] } ?? commandArgs[...]
         if command != "__tmux-compat",
-           command != "claude-teams",
-           command != "codex-teams",
            preSeparatorArgs.contains(where: { $0 == "--help" || $0 == "-h" }) {
             if dispatchSubcommandHelp(command: command, commandArgs: commandArgs) {
                 return
@@ -2440,7 +2344,10 @@ struct CMUXCLI {
            settingsCommandDoesNotNeedSocket(commandArgs) {
             try runSettings(
                 commandArgs: commandArgs,
-                socketPath: CLISocketPathResolver.defaultSocketPath,
+                socketPath: CLISocketPathResolver.defaultSocketPath(
+                    bundleIdentifier: cliBundleIdentifier,
+                    environment: processEnv
+                ),
                 explicitPassword: socketPasswordArg,
                 jsonOutput: jsonOutput
             )
@@ -2463,12 +2370,19 @@ struct CMUXCLI {
         let envSocketPath = explicitSocketPath == nil
             ? try CLISocketEnvironment.socketPath(in: processEnv)
             : CLISocketEnvironment.socketPathForTelemetry(in: processEnv)
-        let socketPath = explicitSocketPath ?? envSocketPath ?? CLISocketPathResolver.defaultSocketPath
+        let socketPath = explicitSocketPath ?? envSocketPath ?? CLISocketPathResolver.defaultSocketPath(
+            bundleIdentifier: cliBundleIdentifier,
+            environment: processEnv
+        )
         let socketPathSource: CLISocketPathSource
         if explicitSocketPath != nil {
             socketPathSource = .explicitFlag
         } else if let envSocketPath {
-            socketPathSource = CLISocketPathResolver.isImplicitDefaultPath(envSocketPath) ? .implicitDefault : .environment
+            socketPathSource = CLISocketPathResolver.isImplicitDefaultPath(
+                envSocketPath,
+                bundleIdentifier: cliBundleIdentifier,
+                environment: processEnv
+            ) ? .implicitDefault : .environment
         } else {
             socketPathSource = .implicitDefault
         }
@@ -2481,7 +2395,8 @@ struct CMUXCLI {
         let resolvedSocketPath = CLISocketPathResolver.resolve(
             requestedPath: socketPath,
             source: socketPathSource,
-            environment: processEnv
+            environment: processEnv,
+            bundleIdentifier: cliBundleIdentifier
         )
 
         // If the argument looks like a path (not a known command), open a workspace there.
@@ -2666,6 +2581,11 @@ struct CMUXCLI {
             return
         }
 
+        try validateSurfaceResumeCommandValueOptionsBeforeSocket(
+            command: command,
+            commandArgs: commandArgs
+        )
+
         let client = SocketClient(path: resolvedSocketPath)
         if resolvedSocketPath != socketPath {
             cliTelemetry.breadcrumb(
@@ -2700,9 +2620,9 @@ struct CMUXCLI {
         )
 
         let idFormat = try resolvedIDFormat(jsonOutput: jsonOutput, raw: idFormatArg)
-        // Existing CLI --window routing focuses first so commands without an
+        // Most CLI --window routing focuses first so commands without an
         // explicit window_id still target the selected window.
-        if let windowId {
+        if let windowId, Self.shouldFocusWindowBeforeDispatch(command: command, commandArgs: commandArgs) {
             do {
                 let normalizedWindow = try normalizeWindowHandle(windowId, client: client) ?? windowId
                 _ = try client.sendV2(method: "window.focus", params: ["window_id": normalizedWindow])
@@ -3352,6 +3272,24 @@ struct CMUXCLI {
             try applyFocusOption(focusOpt, defaultValue: false, to: &params)
             let payload = try client.sendV2(method: "surface.create", params: params)
             printV2Payload(payload, jsonOutput: jsonOutput, idFormat: idFormat, fallbackText: v2OKSummary(payload, idFormat: idFormat, kinds: ["surface", "pane", "workspace"]))
+
+        case "surface":
+            try runSurfaceCommand(
+                commandArgs: commandArgs,
+                client: client,
+                jsonOutput: jsonOutput,
+                idFormat: idFormat,
+                windowOverride: windowId
+            )
+
+        case "surface-resume":
+            try runSurfaceResumeCommand(
+                commandArgs: commandArgs,
+                client: client,
+                jsonOutput: jsonOutput,
+                idFormat: idFormat,
+                windowOverride: windowId
+            )
 
         case "close-surface":
             let csWsFlag = optionValue(commandArgs, name: "--workspace")
@@ -4560,6 +4498,7 @@ struct CMUXCLI {
         _ raw: String?,
         client: SocketClient,
         workspaceHandle: String? = nil,
+        windowHandle: String? = nil,
         allowFocused: Bool = false
     ) throws -> String? {
         guard let raw else {
@@ -4579,6 +4518,9 @@ struct CMUXCLI {
         }
 
         var params: [String: Any] = [:]
+        if let windowHandle {
+            params["window_id"] = windowHandle
+        }
         if let workspaceHandle {
             params["workspace_id"] = workspaceHandle
         }
@@ -4698,6 +4640,276 @@ struct CMUXCLI {
         } else {
             print(fallbackText)
         }
+    }
+
+    private func runSurfaceCommand(
+        commandArgs: [String],
+        client: SocketClient,
+        jsonOutput: Bool,
+        idFormat: CLIIDFormat,
+        windowOverride: String?
+    ) throws {
+        guard let subcommand = commandArgs.first?.lowercased() else {
+            throw CLIError(message: "surface requires a subcommand. Try: cmux surface resume show --json")
+        }
+        switch subcommand {
+        case "resume":
+            try runSurfaceResumeCommand(
+                commandArgs: Array(commandArgs.dropFirst()),
+                client: client,
+                jsonOutput: jsonOutput,
+                idFormat: idFormat,
+                windowOverride: windowOverride
+            )
+        default:
+            throw CLIError(message: "Unsupported surface subcommand: \(subcommand)")
+        }
+    }
+
+    private func runSurfaceResumeCommand(
+        commandArgs: [String],
+        client: SocketClient,
+        jsonOutput: Bool,
+        idFormat: CLIIDFormat,
+        windowOverride: String?
+    ) throws {
+        let subcommand = commandArgs.first?.lowercased() ?? "show"
+        let rest = commandArgs.first == nil ? [] : Array(commandArgs.dropFirst())
+        switch subcommand {
+        case "set":
+            try validateSurfaceResumeValueOptions(
+                rest,
+                optionNames: Self.surfaceResumeSetValueOptions,
+                context: "surface resume set"
+            )
+            let target = try surfaceResumeTarget(rest, client: client, windowOverride: windowOverride)
+            var params = target.params
+            let splitRemaining = splitAtArgumentTerminator(target.remaining)
+            let (name, rem1) = parseOption(splitRemaining.options, name: "--name")
+            let (kind, rem2) = parseOption(rem1, name: "--kind")
+            let (checkpoint, rem3) = parseOption(rem2, name: "--checkpoint")
+            let (checkpointID, rem4) = parseOption(rem3, name: "--checkpoint-id")
+            let (source, rem5) = parseOption(rem4, name: "--source")
+            let (cwd, rem6) = parseOption(rem5, name: "--cwd")
+            let (shellCommand, rem7) = parseOption(rem6, name: "--shell")
+
+            if let name { params["name"] = name }
+            if let kind { params["kind"] = kind }
+            if let checkpoint = checkpointID ?? checkpoint { params["checkpoint_id"] = checkpoint }
+            params["source"] = source ?? "cli"
+            params["cwd"] = cwd ?? ProcessInfo.processInfo.environment["PWD"] ?? FileManager.default.currentDirectoryPath
+
+            let commandText: String
+            if let shellCommand {
+                if let unexpected = (rem7 + (splitRemaining.argv ?? [])).first {
+                    throw CLIError(message: "surface resume set: unexpected argument '\(unexpected)' after --shell. Quote the full shell command or use -- <argv...>")
+                }
+                commandText = shellCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+            } else {
+                if splitRemaining.argv != nil, let unexpected = rem7.first {
+                    throw CLIError(message: "surface resume set: unexpected argument '\(unexpected)' before --")
+                }
+                let argv = splitRemaining.argv ?? rem7
+                guard !argv.isEmpty else {
+                    throw CLIError(message: "surface resume set requires --shell <command> or -- <argv...>")
+                }
+                commandText = argv.map(cliShellQuote).joined(separator: " ")
+            }
+            guard !commandText.isEmpty else {
+                throw CLIError(message: "surface resume set requires a non-empty command")
+            }
+            params["command"] = commandText
+
+            let payload = try client.sendV2(method: "surface.resume.set", params: params)
+            printV2Payload(payload, jsonOutput: jsonOutput, idFormat: idFormat, fallbackText: "OK")
+
+        case "show", "get":
+            try validateSurfaceResumeValueOptions(
+                rest,
+                optionNames: Self.surfaceResumeTargetValueOptions,
+                context: "surface resume \(subcommand)"
+            )
+            let params = try surfaceResumeTarget(rest, client: client, windowOverride: windowOverride).params
+            let payload = try client.sendV2(method: "surface.resume.get", params: params)
+            if jsonOutput {
+                print(jsonString(formatIDs(payload, mode: idFormat)))
+            } else if let binding = payload["resume_binding"] as? [String: Any],
+                      let command = binding["command"] as? String,
+                      !command.isEmpty {
+                print(command)
+            } else {
+                print("No resume binding")
+            }
+
+        case "clear":
+            try validateSurfaceResumeValueOptions(
+                rest,
+                optionNames: Self.surfaceResumeClearValueOptions,
+                context: "surface resume clear"
+            )
+            let target = try surfaceResumeTarget(rest, client: client, windowOverride: windowOverride)
+            var params = target.params
+            let (checkpoint, rem1) = parseOption(target.remaining, name: "--checkpoint")
+            let (checkpointID, rem2) = parseOption(rem1, name: "--checkpoint-id")
+            let (source, remaining) = parseOption(rem2, name: "--source")
+            if let unexpected = remaining.first {
+                throw CLIError(message: "surface resume clear: unexpected argument '\(unexpected)'")
+            }
+            if let checkpoint = checkpointID ?? checkpoint { params["checkpoint_id"] = checkpoint }
+            if let source { params["source"] = source }
+            let payload = try client.sendV2(method: "surface.resume.clear", params: params)
+            printV2Payload(payload, jsonOutput: jsonOutput, idFormat: idFormat, fallbackText: "OK")
+
+        default:
+            throw CLIError(message: "Unsupported surface resume subcommand: \(subcommand)")
+        }
+    }
+
+    private func validateSurfaceResumeCommandValueOptionsBeforeSocket(
+        command: String,
+        commandArgs: [String]
+    ) throws {
+        if command == "surface" {
+            guard commandArgs.first?.lowercased() == "resume" else { return }
+            try validateSurfaceResumeCommandValueOptions(Array(commandArgs.dropFirst()))
+            return
+        }
+        if command == "surface-resume" {
+            try validateSurfaceResumeCommandValueOptions(commandArgs)
+        }
+    }
+
+    private func validateSurfaceResumeCommandValueOptions(_ commandArgs: [String]) throws {
+        let subcommand = commandArgs.first?.lowercased() ?? "show"
+        let rest = commandArgs.first == nil ? [] : Array(commandArgs.dropFirst())
+        switch subcommand {
+        case "set":
+            try validateSurfaceResumeValueOptions(
+                rest,
+                optionNames: Self.surfaceResumeSetValueOptions,
+                context: "surface resume set"
+            )
+            try validateSurfaceResumeSetCommandTokensBeforeSocket(rest)
+        case "show", "get":
+            try validateSurfaceResumeValueOptions(
+                rest,
+                optionNames: Self.surfaceResumeTargetValueOptions,
+                context: "surface resume \(subcommand)"
+            )
+        case "clear":
+            try validateSurfaceResumeValueOptions(
+                rest,
+                optionNames: Self.surfaceResumeClearValueOptions,
+                context: "surface resume clear"
+            )
+        default:
+            return
+        }
+    }
+
+    private func validateSurfaceResumeSetCommandTokensBeforeSocket(_ args: [String]) throws {
+        let splitArgs = splitAtArgumentTerminator(args)
+        let (_, rem1) = parseOption(splitArgs.options, name: "--workspace")
+        let (_, rem2) = parseOption(rem1, name: "--surface")
+        let (_, rem3) = parseOption(rem2, name: "--name")
+        let (_, rem4) = parseOption(rem3, name: "--kind")
+        let (_, rem5) = parseOption(rem4, name: "--checkpoint")
+        let (_, rem6) = parseOption(rem5, name: "--checkpoint-id")
+        let (_, rem7) = parseOption(rem6, name: "--source")
+        let (_, rem8) = parseOption(rem7, name: "--cwd")
+        let (shellCommand, remaining) = parseOption(rem8, name: "--shell")
+
+        if shellCommand != nil, let unexpected = (remaining + (splitArgs.argv ?? [])).first {
+            throw CLIError(message: "surface resume set: unexpected argument '\(unexpected)' after --shell. Quote the full shell command or use -- <argv...>")
+        }
+        if splitArgs.argv != nil, let unexpected = remaining.first {
+            throw CLIError(message: "surface resume set: unexpected argument '\(unexpected)' before --")
+        }
+    }
+
+    private static let surfaceResumeTargetValueOptions: Set<String> = ["--workspace", "--surface"]
+    private static let surfaceResumeSetValueOptions: Set<String> = surfaceResumeTargetValueOptions.union([
+        "--name", "--kind", "--checkpoint", "--checkpoint-id", "--source", "--cwd", "--shell",
+    ])
+    private static let surfaceResumeClearValueOptions: Set<String> = surfaceResumeTargetValueOptions.union([
+        "--checkpoint", "--checkpoint-id", "--source",
+    ])
+
+    private func validateSurfaceResumeValueOptions(
+        _ args: [String],
+        optionNames: Set<String>,
+        context: String
+    ) throws {
+        var pastTerminator = false
+        for (index, arg) in args.enumerated() {
+            if pastTerminator {
+                continue
+            }
+            if arg == "--" {
+                pastTerminator = true
+                continue
+            }
+            guard optionNames.contains(arg) else { continue }
+            guard index + 1 < args.count else {
+                throw CLIError(message: "\(context): \(arg) requires a value")
+            }
+            let value = args[index + 1]
+            guard value != "--",
+                  !optionNames.contains(value),
+                  !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw CLIError(message: "\(context): \(arg) requires a value")
+            }
+        }
+    }
+
+    private struct SurfaceResumeTarget {
+        var params: [String: Any]
+        var remaining: [String]
+    }
+
+    private func splitAtArgumentTerminator(_ args: [String]) -> (options: [String], argv: [String]?) {
+        guard let delimiterIndex = args.firstIndex(of: "--") else {
+            return (args, nil)
+        }
+        let argvStart = args.index(after: delimiterIndex)
+        return (Array(args[..<delimiterIndex]), Array(args[argvStart...]))
+    }
+
+    private func surfaceResumeTarget(
+        _ args: [String],
+        client: SocketClient,
+        windowOverride: String?
+    ) throws -> SurfaceResumeTarget {
+        let splitArgs = splitAtArgumentTerminator(args)
+        let (workspaceOpt, rem1) = parseOption(splitArgs.options, name: "--workspace")
+        let (surfaceOpt, remaining) = parseOption(rem1, name: "--surface")
+        let env = ProcessInfo.processInfo.environment
+        let usesImplicitSurface = surfaceOpt == nil
+            && windowOverride == nil
+            && env["CMUX_SURFACE_ID"]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        let shouldUseEnvWorkspace = surfaceOpt == nil
+            && !usesImplicitSurface
+            && windowOverride == nil
+        let workspaceRaw = workspaceOpt ?? (shouldUseEnvWorkspace ? env["CMUX_WORKSPACE_ID"] : nil)
+        let surfaceRaw = surfaceOpt ?? (workspaceOpt == nil && windowOverride == nil ? env["CMUX_SURFACE_ID"] : nil)
+        var params: [String: Any] = [:]
+        let windowHandle = try normalizeWindowHandle(windowOverride, client: client)
+        if let windowHandle { params["window_id"] = windowHandle }
+        let workspaceId = try normalizeWorkspaceHandle(workspaceRaw, client: client, windowHandle: windowHandle)
+        if let workspaceId { params["workspace_id"] = workspaceId }
+        let surfaceId = try normalizeSurfaceHandle(
+            surfaceRaw,
+            client: client,
+            workspaceHandle: workspaceId,
+            windowHandle: windowHandle
+        )
+        if let surfaceId { params["surface_id"] = surfaceId }
+        let remainingWithArgv = remaining + (splitArgs.argv.map { ["--"] + $0 } ?? [])
+        return SurfaceResumeTarget(params: params, remaining: remainingWithArgv)
+    }
+
+    private func cliShellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     private func debugString(_ value: Any?) -> String? {
@@ -5981,7 +6193,7 @@ struct CMUXCLI {
                     )
                 }
 
-                let projectMarker = current.appendingPathComponent("GhosttyTabs.xcodeproj/project.pbxproj", isDirectory: false)
+                let projectMarker = current.appendingPathComponent("cmux.xcodeproj/project.pbxproj", isDirectory: false)
                 if fileManager.fileExists(atPath: projectMarker.path) {
                     candidates.append(
                         current
@@ -6295,7 +6507,9 @@ struct CMUXCLI {
             "CMUX_SSH_PENDING_SIGNAL=",
             "cmux_ssh_note() { if [ -t 2 ]; then printf \"$@\" >&2 || true; fi; }",
             "cmux_ssh_session_end() { if [ \"${CMUX_SSH_SESSION_ENDED:-0}\" = 1 ]; then return; fi; CMUX_SSH_SESSION_ENDED=1; \(lifecycleCleanup); }",
-            "cmux_ssh_signal_exit() { cmux_ssh_signal_status=\"$1\"; if [ -z \"${CMUX_SSH_CHILD_PID:-}\" ]; then CMUX_SSH_PENDING_SIGNAL=\"$cmux_ssh_signal_status\"; return; fi; CMUX_SSH_SESSION_ENDED=1; trap - EXIT HUP INT TERM; kill -TERM \"$CMUX_SSH_CHILD_PID\" 2>/dev/null || true; exit \"$cmux_ssh_signal_status\"; }",
+            // Pane-close signals are terminal lifecycle, not SSH transport lifecycle.
+            // Avoid sending an extra TERM to a child that may own the shared ControlMaster path.
+            "cmux_ssh_signal_exit() { cmux_ssh_signal_status=\"$1\"; if [ -z \"${CMUX_SSH_CHILD_PID:-}\" ]; then CMUX_SSH_PENDING_SIGNAL=\"$cmux_ssh_signal_status\"; return; fi; CMUX_SSH_SESSION_ENDED=1; trap - EXIT HUP INT TERM; exit \"$cmux_ssh_signal_status\"; }",
             "trap 'cmux_ssh_session_end' EXIT",
             "trap 'cmux_ssh_signal_exit 129' HUP",
             "trap 'cmux_ssh_signal_exit 130' INT",
@@ -8749,7 +8963,12 @@ struct CMUXCLI {
                 params["timeout_ms"] = max(1, Int(seconds * 1000.0))
             }
 
-            let payload = try client.sendV2(method: "browser.download.wait", params: params)
+            let defaultDownloadWaitTimeoutMs = 10_000
+            let maxDownloadWaitTimeoutMs = 120_000
+            let requestedTimeoutMs = (params["timeout_ms"] as? Int) ?? defaultDownloadWaitTimeoutMs
+            let effectiveTimeoutMs = min(requestedTimeoutMs, maxDownloadWaitTimeoutMs)
+            let responseTimeout = Double(max(1, effectiveTimeoutMs)) / 1000.0 + 5.0
+            let payload = try client.sendV2(method: "browser.download.wait", params: params, responseTimeout: responseTimeout)
             output(payload, fallback: "OK")
             return
         }
@@ -9479,7 +9698,7 @@ struct CMUXCLI {
             agent. Claude Code hooks are injected automatically by the cmux Claude wrapper.
 
             Agents:
-              codex, opencode, pi, amp, cursor, gemini, rovodev (alias: rovo), hermes-agent, copilot, codebuddy, factory, qoder
+              codex, grok, opencode, pi, amp, cursor, gemini, rovodev (alias: rovo), hermes-agent, copilot, codebuddy, factory, qoder
 
             Hook targets:
               setup              Install hooks for all supported agents on PATH
@@ -10015,17 +10234,17 @@ struct CMUXCLI {
             Flags:
               --all                         Include all windows (default: current window only)
               --workspace <id|ref|index>   Show only one workspace
-              --processes                  Include process trees under surfaces, webviews, and tags
-              --sort <cpu|rss|proc>         Sort sibling rows by CPU, memory, or process count
+              --processes                  Include process trees under windows, surfaces, webviews, and tags
+              --sort <cpu|mem|proc>         Sort sibling rows by CPU, memory, or process count
               --flat                        Print independent rows for shell sorting
               --format <tree|tsv>           Text output format (tsv implies --flat)
               --json                        Structured JSON output
 
             Output:
               CPU comes from macOS process accounting and can exceed 100% across cores.
-              RSS is summed across the unique process IDs attributed to each tree node.
+              Memory is summed from macOS physical footprint across the unique process IDs attributed to each tree node.
               Browser webviews are attributed through their WebKit content process PID.
-              TSV columns are: cpu_percent, rss_bytes, process_count, kind, ref, parent_ref, title.
+              TSV columns are: cpu_percent, memory_bytes, process_count, kind, ref, parent_ref, title.
 
             Example:
               cmux top
@@ -10159,6 +10378,32 @@ struct CMUXCLI {
             Example:
               cmux surface-health
               cmux surface-health --workspace workspace:2
+            """
+        case "surface", "surface-resume":
+            return """
+            Usage: cmux surface resume set [flags] -- <argv...>
+                   cmux surface resume set [flags] --shell <command>
+                   cmux surface resume show [--json] [flags]
+                   cmux surface resume get [--json] [flags]
+                   cmux surface resume clear [flags]
+
+            Attach restart command metadata to a terminal surface.
+            Public CLI bindings are stored for inspection and manual restore.
+
+            Flags:
+              --workspace <id|ref>     Workspace context (default: $CMUX_WORKSPACE_ID)
+              --surface <id|ref>       Surface context (default: $CMUX_SURFACE_ID)
+              --cwd <path>             Working directory for restore (default: $PWD)
+              --name <name>            Display name for the binding
+              --kind <kind>            Binding kind, for example agent or tmux
+              --checkpoint <id>        Provider checkpoint or session id
+              --checkpoint-id <id>     Same as --checkpoint and takes precedence
+              --source <source>        Binding source label
+
+            Examples:
+              cmux surface resume set --kind tmux --shell "tmux attach -t work"
+              cmux surface resume set --kind opencode --checkpoint ses_123 -- opencode --session ses_123
+              cmux surface resume show --json
             """
         case "debug-terminals":
             return """
@@ -10595,7 +10840,7 @@ struct CMUXCLI {
             Clear all queued notifications.
             """
         case "set-status":
-            return """
+            return String(localized: "cli.help.setStatus", defaultValue: """
             Usage: cmux set-status <key> <value> [flags]
 
             Set a sidebar status entry for a workspace. Status entries appear as
@@ -10605,12 +10850,13 @@ struct CMUXCLI {
             Flags:
               --icon <name>          Icon name (e.g. "sparkle", "hammer")
               --color <#hex>         Pill color (e.g. "#ff9500")
+              --priority <n>         Sort priority; higher appears first (default: 0)
               --workspace <id|ref>   Target workspace (default: $CMUX_WORKSPACE_ID)
 
             Example:
-              cmux set-status build "compiling" --icon hammer --color "#ff9500"
+              cmux set-status build "compiling" --icon hammer --color "#ff9500" --priority 80
               cmux set-status deploy "v1.2.3" --workspace workspace:2
-            """
+            """)
         case "clear-status":
             return """
             Usage: cmux clear-status <key> [flags]
@@ -11419,7 +11665,7 @@ struct CMUXCLI {
         }
         let (sortOpt, rem1) = parseOption(rem0, name: "--sort")
         if rem1.contains("--sort") {
-            throw CLIError(message: "top requires --sort <cpu|rss|proc>")
+            throw CLIError(message: "top requires --sort <cpu|mem|proc>")
         }
         let (formatOpt, rem2) = parseOption(rem1, name: "--format")
         if rem2.contains("--format") {
@@ -11452,7 +11698,7 @@ struct CMUXCLI {
         }
 
         if let unknown = remaining.first(where: { $0.hasPrefix("--") }) {
-            throw CLIError(message: "top: unknown flag '\(unknown)'. Known flags: --all --workspace <id|ref|index> --processes --sort <cpu|rss|proc> --flat --format <tree|tsv> --json")
+            throw CLIError(message: "top: unknown flag '\(unknown)'. Known flags: --all --workspace <id|ref|index> --processes --sort <cpu|mem|proc> --flat --format <tree|tsv> --json")
         }
         if let extra = remaining.first {
             throw CLIError(message: "top: unexpected argument '\(extra)'")
@@ -11481,11 +11727,11 @@ struct CMUXCLI {
         case "cpu", "cpu%":
             return .cpu
         case "rss", "mem", "memory", "ram":
-            return .rss
+            return .memory
         case "proc", "process", "processes", "count":
             return .proc
         default:
-            throw CLIError(message: "top: invalid --sort value '\(raw)'. Use cpu, rss, or proc")
+            throw CLIError(message: "top: invalid --sort value '\(raw)'. Use cpu, mem, or proc")
         }
     }
 
@@ -12010,7 +12256,7 @@ struct CMUXCLI {
         let windows = payload["windows"] as? [[String: Any]] ?? []
         guard !windows.isEmpty else { return "No windows" }
 
-        var lines: [String] = ["  CPU%       RSS  PROC  NODE"]
+        var lines: [String] = ["  CPU%    MEMORY  PROC  NODE"]
         if let totals = payload["totals"] as? [String: Any] {
             lines.append("\(topResourceColumns(resources: totals))total")
         }
@@ -12018,76 +12264,101 @@ struct CMUXCLI {
         for window in topSortedItems(windows, sortKey: sortKey, node: { $0 }) {
             lines.append("\(topResourceColumns(node: window))\(topWindowLabel(window, idFormat: idFormat))")
 
-            let workspaces = topSortedItems(window["workspaces"] as? [[String: Any]] ?? [], sortKey: sortKey, node: { $0 })
-            for (workspaceIndex, workspace) in workspaces.enumerated() {
-                let workspaceIsLast = workspaceIndex == workspaces.count - 1
-                let workspaceBranch = workspaceIsLast ? "└── " : "├── "
-                let workspaceIndent = workspaceIsLast ? "    " : "│   "
-                lines.append("\(topResourceColumns(node: workspace))\(workspaceBranch)\(topWorkspaceLabel(workspace, idFormat: idFormat))")
+            let windowProcesses = showProcesses ? (window["processes"] as? [[String: Any]] ?? []) : []
+            let workspaces = window["workspaces"] as? [[String: Any]] ?? []
+            let windowChildren = topSortedItems(
+                windowProcesses.map { TopWindowChild.process($0) } + workspaces.map { TopWindowChild.workspace($0) },
+                sortKey: sortKey,
+                node: { $0.node }
+            )
+            for (windowChildIndex, windowChild) in windowChildren.enumerated() {
+                let windowChildIsLast = windowChildIndex == windowChildren.count - 1
+                let windowChildBranch = windowChildIsLast ? "└── " : "├── "
+                let windowChildIndent = windowChildIsLast ? "    " : "│   "
 
-                let tags = workspace["tags"] as? [[String: Any]] ?? []
-                let panes = workspace["panes"] as? [[String: Any]] ?? []
-                let workspaceChildren = topSortedItems(
-                    tags.map { TopWorkspaceChild.tag($0) } + panes.map { TopWorkspaceChild.pane($0) },
-                    sortKey: sortKey,
-                    node: { $0.node }
-                )
+                switch windowChild {
+                case .process(let process):
+                    lines.append("\(topResourceColumns(node: process))\(windowChildBranch)\(topProcessLabel(process))")
+                    appendTopProcessLines(
+                        process["children"] as? [[String: Any]] ?? [],
+                        to: &lines,
+                        indent: windowChildIndent,
+                        sortKey: sortKey
+                    )
+                case .workspace(let workspace):
+                    lines.append("\(topResourceColumns(node: workspace))\(windowChildBranch)\(topWorkspaceLabel(workspace, idFormat: idFormat))")
 
-                for (workspaceChildIndex, workspaceChild) in workspaceChildren.enumerated() {
-                    let childIsLast = workspaceChildIndex == workspaceChildren.count - 1
-                    switch workspaceChild {
-                    case .tag(let tag):
-                        let tagIsLast = childIsLast
-                        let tagBranch = tagIsLast ? "└── " : "├── "
-                        let tagIndent = tagIsLast ? "    " : "│   "
-                        lines.append("\(topResourceColumns(node: tag))\(workspaceIndent)\(tagBranch)\(topTagLabel(tag))")
-                        if showProcesses {
-                            appendTopProcessLines(
-                                tag["processes"] as? [[String: Any]] ?? [],
-                                to: &lines,
-                                indent: workspaceIndent + tagIndent,
-                                sortKey: sortKey
-                            )
-                        }
-                    case .pane(let pane):
-                        let paneIsLast = childIsLast
-                        let paneBranch = paneIsLast ? "└── " : "├── "
-                        let paneIndent = paneIsLast ? "    " : "│   "
-                        lines.append("\(topResourceColumns(node: pane))\(workspaceIndent)\(paneBranch)\(topPaneLabel(pane, idFormat: idFormat))")
+                    let tags = workspace["tags"] as? [[String: Any]] ?? []
+                    let panes = workspace["panes"] as? [[String: Any]] ?? []
+                    let workspaceChildren = topSortedItems(
+                        tags.map { TopWorkspaceChild.tag($0) } + panes.map { TopWorkspaceChild.pane($0) },
+                        sortKey: sortKey,
+                        node: { $0.node }
+                    )
 
-                        let surfaces = topSortedItems(pane["surfaces"] as? [[String: Any]] ?? [], sortKey: sortKey, node: { $0 })
-                        for (surfaceIndex, surface) in surfaces.enumerated() {
-                            let surfaceIsLast = surfaceIndex == surfaces.count - 1
-                            let surfaceBranch = surfaceIsLast ? "└── " : "├── "
-                            let surfaceIndent = surfaceIsLast ? "    " : "│   "
-                            lines.append("\(topResourceColumns(node: surface))\(workspaceIndent)\(paneIndent)\(surfaceBranch)\(topSurfaceLabel(surface, idFormat: idFormat))")
+                    for (workspaceChildIndex, workspaceChild) in workspaceChildren.enumerated() {
+                        let childIsLast = workspaceChildIndex == workspaceChildren.count - 1
+                        switch workspaceChild {
+                        case .tag(let tag):
+                            let tagIsLast = childIsLast
+                            let tagBranch = tagIsLast ? "└── " : "├── "
+                            let tagIndent = tagIsLast ? "    " : "│   "
+                            lines.append("\(topResourceColumns(node: tag))\(windowChildIndent)\(tagBranch)\(topTagLabel(tag))")
+                            if showProcesses {
+                                appendTopProcessLines(
+                                    tag["processes"] as? [[String: Any]] ?? [],
+                                    to: &lines,
+                                    indent: windowChildIndent + tagIndent,
+                                    sortKey: sortKey
+                                )
+                            }
+                        case .pane(let pane):
+                            let paneIsLast = childIsLast
+                            let paneBranch = paneIsLast ? "└── " : "├── "
+                            let paneIndent = paneIsLast ? "    " : "│   "
+                            lines.append("\(topResourceColumns(node: pane))\(windowChildIndent)\(paneBranch)\(topPaneLabel(pane, idFormat: idFormat))")
 
-                            let webviews = topSortedItems(surface["webviews"] as? [[String: Any]] ?? [], sortKey: sortKey, node: { $0 })
-                            let surfaceProcesses = surface["processes"] as? [[String: Any]] ?? []
-                            let hasSurfaceProcesses = showProcesses && !surfaceProcesses.isEmpty
-                            if !webviews.isEmpty {
-                                for (webviewIndex, webview) in webviews.enumerated() {
-                                    let webviewIsLast = webviewIndex == webviews.count - 1 && !hasSurfaceProcesses
-                                    let webviewBranch = webviewIsLast ? "└── " : "├── "
-                                    let webviewIndent = webviewIsLast ? "    " : "│   "
-                                    lines.append("\(topResourceColumns(node: webview))\(workspaceIndent)\(paneIndent)\(surfaceIndent)\(webviewBranch)\(topWebViewLabel(webview))")
-                                    if showProcesses {
-                                        appendTopProcessLines(
-                                            webview["processes"] as? [[String: Any]] ?? [],
+                            let surfaces = topSortedItems(pane["surfaces"] as? [[String: Any]] ?? [], sortKey: sortKey, node: { $0 })
+                            for (surfaceIndex, surface) in surfaces.enumerated() {
+                                let surfaceIsLast = surfaceIndex == surfaces.count - 1
+                                let surfaceBranch = surfaceIsLast ? "└── " : "├── "
+                                let surfaceIndent = surfaceIsLast ? "    " : "│   "
+                                lines.append("\(topResourceColumns(node: surface))\(windowChildIndent)\(paneIndent)\(surfaceBranch)\(topSurfaceLabel(surface, idFormat: idFormat))")
+
+                                let webviews = surface["webviews"] as? [[String: Any]] ?? []
+                                let surfaceProcesses = showProcesses ? (surface["processes"] as? [[String: Any]] ?? []) : []
+                                let surfaceChildren = topSortedItems(
+                                    webviews.map { TopSurfaceChild.webview($0) } + surfaceProcesses.map { TopSurfaceChild.process($0) },
+                                    sortKey: sortKey,
+                                    node: { $0.node }
+                                )
+                                for (surfaceChildIndex, surfaceChild) in surfaceChildren.enumerated() {
+                                    let surfaceChildIsLast = surfaceChildIndex == surfaceChildren.count - 1
+                                    let surfaceChildBranch = surfaceChildIsLast ? "└── " : "├── "
+                                    let surfaceChildIndent = surfaceChildIsLast ? "    " : "│   "
+
+                                    switch surfaceChild {
+                                    case .webview(let webview):
+                                        lines.append("\(topResourceColumns(node: webview))\(windowChildIndent)\(paneIndent)\(surfaceIndent)\(surfaceChildBranch)\(topWebViewLabel(webview))")
+                                        if showProcesses {
+                                            appendTopProcessLines(
+                                                webview["processes"] as? [[String: Any]] ?? [],
+                                                to: &lines,
+                                                indent: windowChildIndent + paneIndent + surfaceIndent + surfaceChildIndent,
+                                                sortKey: sortKey
+                                            )
+                                        }
+                                    case .process(let process):
+                                        appendTopProcessLine(
+                                            process,
                                             to: &lines,
-                                            indent: workspaceIndent + paneIndent + surfaceIndent + webviewIndent,
+                                            indent: windowChildIndent + paneIndent + surfaceIndent,
+                                            branch: surfaceChildBranch,
+                                            childIndent: surfaceChildIndent,
                                             sortKey: sortKey
                                         )
                                     }
                                 }
-                            }
-                            if showProcesses {
-                                appendTopProcessLines(
-                                    surfaceProcesses,
-                                    to: &lines,
-                                    indent: workspaceIndent + paneIndent + surfaceIndent,
-                                    sortKey: sortKey
-                                )
                             }
                         }
                     }
@@ -12098,6 +12369,18 @@ struct CMUXCLI {
         return lines.joined(separator: "\n")
     }
 
+    private enum TopWindowChild {
+        case process([String: Any])
+        case workspace([String: Any])
+
+        var node: [String: Any] {
+            switch self {
+            case .process(let node), .workspace(let node):
+                return node
+            }
+        }
+    }
+
     private enum TopWorkspaceChild {
         case tag([String: Any])
         case pane([String: Any])
@@ -12105,6 +12388,18 @@ struct CMUXCLI {
         var node: [String: Any] {
             switch self {
             case .tag(let node), .pane(let node):
+                return node
+            }
+        }
+    }
+
+    private enum TopSurfaceChild {
+        case webview([String: Any])
+        case process([String: Any])
+
+        var node: [String: Any] {
+            switch self {
+            case .webview(let node), .process(let node):
                 return node
             }
         }
@@ -12130,8 +12425,8 @@ struct CMUXCLI {
         case .cpu:
             let value = topDouble(resources["cpu_percent"])
             return value.isFinite ? value : 0
-        case .rss:
-            return Double(topInt64(resources["resident_bytes"]))
+        case .memory:
+            return Double(topMemoryBytes(resources))
         case .proc:
             return Double(topInt(resources["process_count"]) ?? 0)
         }
@@ -12181,105 +12476,129 @@ struct CMUXCLI {
                 to: &rows
             )
 
-            let workspaces = topSortedItems(window["workspaces"] as? [[String: Any]] ?? [], sortKey: sortKey, node: { $0 })
-            for workspace in workspaces {
-                let workspaceRef = topFlatHandle(workspace, fallback: "workspace", idFormat: idFormat)
-                appendTopFlatNode(
-                    workspace,
-                    kind: "workspace",
-                    ref: workspaceRef,
-                    parentRef: windowRef,
-                    title: workspace["title"] as? String ?? "",
-                    ordinal: &ordinal,
-                    to: &rows
-                )
+            let windowProcesses = showProcesses ? (window["processes"] as? [[String: Any]] ?? []) : []
+            let workspaces = window["workspaces"] as? [[String: Any]] ?? []
+            let windowChildren = topSortedItems(
+                windowProcesses.map { TopWindowChild.process($0) } + workspaces.map { TopWindowChild.workspace($0) },
+                sortKey: sortKey,
+                node: { $0.node }
+            )
+            for windowChild in windowChildren {
+                switch windowChild {
+                case .process(let process):
+                    appendTopFlatProcesses(
+                        [process],
+                        parentRef: windowRef,
+                        ordinal: &ordinal,
+                        to: &rows,
+                        sortKey: sortKey
+                    )
+                case .workspace(let workspace):
+                    let workspaceRef = topFlatHandle(workspace, fallback: "workspace", idFormat: idFormat)
+                    appendTopFlatNode(
+                        workspace,
+                        kind: "workspace",
+                        ref: workspaceRef,
+                        parentRef: windowRef,
+                        title: workspace["title"] as? String ?? "",
+                        ordinal: &ordinal,
+                        to: &rows
+                    )
 
-                let tags = workspace["tags"] as? [[String: Any]] ?? []
-                let panes = workspace["panes"] as? [[String: Any]] ?? []
-                let workspaceChildren = topSortedItems(
-                    tags.map { TopWorkspaceChild.tag($0) } + panes.map { TopWorkspaceChild.pane($0) },
-                    sortKey: sortKey,
-                    node: { $0.node }
-                )
-                for workspaceChild in workspaceChildren {
-                    switch workspaceChild {
-                    case .tag(let tag):
-                        let tagRef = topFlatHandle(tag, fallback: topLabelText(tag["key"] as? String), idFormat: idFormat)
-                        appendTopFlatNode(
-                            tag,
-                            kind: "tag",
-                            ref: tagRef,
-                            parentRef: workspaceRef,
-                            title: tag["value"] as? String ?? "",
-                            ordinal: &ordinal,
-                            to: &rows
-                        )
-                        if showProcesses {
-                            appendTopFlatProcesses(
-                                tag["processes"] as? [[String: Any]] ?? [],
-                                parentRef: tagRef,
-                                ordinal: &ordinal,
-                                to: &rows,
-                                sortKey: sortKey
-                            )
-                        }
-                    case .pane(let pane):
-                        let paneRef = topFlatHandle(pane, fallback: "pane", idFormat: idFormat)
-                        appendTopFlatNode(
-                            pane,
-                            kind: "pane",
-                            ref: paneRef,
-                            parentRef: workspaceRef,
-                            title: "",
-                            ordinal: &ordinal,
-                            to: &rows
-                        )
-
-                        let surfaces = topSortedItems(pane["surfaces"] as? [[String: Any]] ?? [], sortKey: sortKey, node: { $0 })
-                        for surface in surfaces {
-                            let surfaceRef = topFlatHandle(surface, fallback: "surface", idFormat: idFormat)
+                    let tags = workspace["tags"] as? [[String: Any]] ?? []
+                    let panes = workspace["panes"] as? [[String: Any]] ?? []
+                    let workspaceChildren = topSortedItems(
+                        tags.map { TopWorkspaceChild.tag($0) } + panes.map { TopWorkspaceChild.pane($0) },
+                        sortKey: sortKey,
+                        node: { $0.node }
+                    )
+                    for workspaceChild in workspaceChildren {
+                        switch workspaceChild {
+                        case .tag(let tag):
+                            let tagRef = topFlatHandle(tag, fallback: topLabelText(tag["key"] as? String), idFormat: idFormat)
                             appendTopFlatNode(
-                                surface,
-                                kind: "surface",
-                                ref: surfaceRef,
-                                parentRef: paneRef,
-                                title: surface["title"] as? String ?? "",
+                                tag,
+                                kind: "tag",
+                                ref: tagRef,
+                                parentRef: workspaceRef,
+                                title: tag["value"] as? String ?? "",
                                 ordinal: &ordinal,
                                 to: &rows
                             )
-
-                            let webviews = topSortedItems(surface["webviews"] as? [[String: Any]] ?? [], sortKey: sortKey, node: { $0 })
-                            for webview in webviews {
-                                let fallback = topInt(webview["pid"]).map { "pid:\($0)" } ?? "webview"
-                                let webviewRef = topFlatHandle(webview, fallback: fallback, idFormat: idFormat)
-                                appendTopFlatNode(
-                                    webview,
-                                    kind: "webview",
-                                    ref: webviewRef,
-                                    parentRef: surfaceRef,
-                                    title: webview["title"] as? String ?? "",
-                                    ordinal: &ordinal,
-                                    to: &rows
-                                )
-                                if showProcesses {
-                                    appendTopFlatProcesses(
-                                        webview["processes"] as? [[String: Any]] ?? [],
-                                        parentRef: webviewRef,
-                                        ordinal: &ordinal,
-                                        to: &rows,
-                                        sortKey: sortKey
-                                    )
-                                }
-                            }
-
                             if showProcesses {
                                 appendTopFlatProcesses(
-                                    surface["processes"] as? [[String: Any]] ?? [],
-                                    parentRef: surfaceRef,
+                                    tag["processes"] as? [[String: Any]] ?? [],
+                                    parentRef: tagRef,
                                     ordinal: &ordinal,
                                     to: &rows,
                                     sortKey: sortKey
                                 )
+                            }
+                        case .pane(let pane):
+                            let paneRef = topFlatHandle(pane, fallback: "pane", idFormat: idFormat)
+                            appendTopFlatNode(
+                                pane,
+                                kind: "pane",
+                                ref: paneRef,
+                                parentRef: workspaceRef,
+                                title: "",
+                                ordinal: &ordinal,
+                                to: &rows
+                            )
+
+                            let surfaces = topSortedItems(pane["surfaces"] as? [[String: Any]] ?? [], sortKey: sortKey, node: { $0 })
+                            for surface in surfaces {
+                                let surfaceRef = topFlatHandle(surface, fallback: "surface", idFormat: idFormat)
+                                appendTopFlatNode(
+                                    surface,
+                                    kind: "surface",
+                                    ref: surfaceRef,
+                                    parentRef: paneRef,
+                                    title: surface["title"] as? String ?? "",
+                                    ordinal: &ordinal,
+                                    to: &rows
+                                )
+
+                                let webviews = surface["webviews"] as? [[String: Any]] ?? []
+                                let surfaceProcesses = showProcesses ? (surface["processes"] as? [[String: Any]] ?? []) : []
+                                let surfaceChildren = topSortedItems(
+                                    webviews.map { TopSurfaceChild.webview($0) } + surfaceProcesses.map { TopSurfaceChild.process($0) },
+                                    sortKey: sortKey,
+                                    node: { $0.node }
+                                )
+                                for surfaceChild in surfaceChildren {
+                                    switch surfaceChild {
+                                    case .webview(let webview):
+                                        let fallback = topInt(webview["pid"]).map { "pid:\($0)" } ?? "webview"
+                                        let webviewRef = topFlatHandle(webview, fallback: fallback, idFormat: idFormat)
+                                        appendTopFlatNode(
+                                            webview,
+                                            kind: "webview",
+                                            ref: webviewRef,
+                                            parentRef: surfaceRef,
+                                            title: webview["title"] as? String ?? "",
+                                            ordinal: &ordinal,
+                                            to: &rows
+                                        )
+                                        if showProcesses {
+                                            appendTopFlatProcesses(
+                                                webview["processes"] as? [[String: Any]] ?? [],
+                                                parentRef: webviewRef,
+                                                ordinal: &ordinal,
+                                                to: &rows,
+                                                sortKey: sortKey
+                                            )
+                                        }
+                                    case .process(let process):
+                                        appendTopFlatProcesses(
+                                            [process],
+                                            parentRef: surfaceRef,
+                                            ordinal: &ordinal,
+                                            to: &rows,
+                                            sortKey: sortKey
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -12371,7 +12690,7 @@ struct CMUXCLI {
     private func topFlatTSVLine(_ row: TopFlatRow) -> String {
         [
             topFlatCPU(row.resources),
-            String(topInt64(row.resources["resident_bytes"])),
+            String(topMemoryBytes(row.resources)),
             String(topInt(row.resources["process_count"]) ?? 0),
             topTSVField(row.kind),
             topTSVField(row.ref),
@@ -12401,14 +12720,32 @@ struct CMUXCLI {
             let isLast = index == sortedProcesses.count - 1
             let branch = isLast ? "└── " : "├── "
             let childIndent = isLast ? "    " : "│   "
-            lines.append("\(topResourceColumns(node: process))\(indent)\(branch)\(topProcessLabel(process))")
-            appendTopProcessLines(
-                process["children"] as? [[String: Any]] ?? [],
+            appendTopProcessLine(
+                process,
                 to: &lines,
-                indent: indent + childIndent,
+                indent: indent,
+                branch: branch,
+                childIndent: childIndent,
                 sortKey: sortKey
             )
         }
+    }
+
+    private func appendTopProcessLine(
+        _ process: [String: Any],
+        to lines: inout [String],
+        indent: String,
+        branch: String,
+        childIndent: String,
+        sortKey: TopSortKey?
+    ) {
+        lines.append("\(topResourceColumns(node: process))\(indent)\(branch)\(topProcessLabel(process))")
+        appendTopProcessLines(
+            process["children"] as? [[String: Any]] ?? [],
+            to: &lines,
+            indent: indent + childIndent,
+            sortKey: sortKey
+        )
     }
 
     private func topWindowLabel(_ window: [String: Any], idFormat: CLIIDFormat) -> String {
@@ -12511,7 +12848,12 @@ struct CMUXCLI {
         let pid = topInt(process["pid"]).map(String.init) ?? "?"
         let name = topLabelText(process["name"] as? String)
         let label = name.isEmpty ? "process" : name
-        return "process \(pid) \(label)"
+        var parts = ["process", pid, label]
+        let attributionReason = topLabelText(process["attribution_reason"] as? String)
+        if !attributionReason.isEmpty {
+            parts.append("[\(attributionReason)]")
+        }
+        return parts.joined(separator: " ")
     }
 
     private func topResourceColumns(node: [String: Any]) -> String {
@@ -12520,12 +12862,19 @@ struct CMUXCLI {
 
     private func topResourceColumns(resources: [String: Any]) -> String {
         let cpu = topDouble(resources["cpu_percent"])
-        let rss = topInt64(resources["resident_bytes"])
+        let memory = topMemoryBytes(resources)
         let count = topInt(resources["process_count"]) ?? 0
         let cpuText = String(format: "%6.1f%%", cpu)
-        let rssText = padLeft(formatBytes(rss), width: 9)
+        let memoryText = padLeft(formatBytes(memory), width: 9)
         let countText = padLeft(String(count), width: 5)
-        return "\(cpuText) \(rssText) \(countText)  "
+        return "\(cpuText) \(memoryText) \(countText)  "
+    }
+
+    private func topMemoryBytes(_ resources: [String: Any]) -> Int64 {
+        if resources["memory_bytes"] != nil {
+            return topInt64(resources["memory_bytes"])
+        }
+        return topInt64(resources["resident_bytes"])
     }
 
     private func formatBytes(_ bytes: Int64) -> String {
@@ -13182,11 +13531,19 @@ struct CMUXCLI {
 
     private func tmuxCompatResolvedSocketPath(processEnvironment: [String: String]) throws -> String {
         let envSocketPath = try CLISocketEnvironment.socketPath(in: processEnvironment)
+        let bundleIdentifier = CLISocketPathResolver.currentAppBundleIdentifier()
 
-        let requestedSocketPath = envSocketPath ?? CLISocketPathResolver.defaultSocketPath
+        let requestedSocketPath = envSocketPath ?? CLISocketPathResolver.defaultSocketPath(
+            bundleIdentifier: bundleIdentifier,
+            environment: processEnvironment
+        )
         let source: CLISocketPathSource
         if let envSocketPath {
-            source = CLISocketPathResolver.isImplicitDefaultPath(envSocketPath) ? .implicitDefault : .environment
+            source = CLISocketPathResolver.isImplicitDefaultPath(
+                envSocketPath,
+                bundleIdentifier: bundleIdentifier,
+                environment: processEnvironment
+            ) ? .implicitDefault : .environment
         } else {
             source = .implicitDefault
         }
@@ -13194,7 +13551,8 @@ struct CMUXCLI {
         return CLISocketPathResolver.resolve(
             requestedPath: requestedSocketPath,
             source: source,
-            environment: processEnvironment
+            environment: processEnvironment,
+            bundleIdentifier: bundleIdentifier
         )
     }
 
@@ -14719,7 +15077,8 @@ struct CMUXCLI {
         }
     }
 
-    private static let omoPluginName = "oh-my-opencode"
+    private static let omoPluginName = "oh-my-openagent"
+    private static let legacyOmoPluginName = "oh-my-opencode"
     private static let openCodeSessionPluginConfigSpec = "./plugins/cmux-session.js"
 
     private func resolveExecutableInPath(_ name: String) -> String? {
@@ -14762,7 +15121,7 @@ struct CMUXCLI {
 
         // Keep the shadow package isolated from stale/yanked pins in the user's
         // opencode package.json. bun will update this manifest with the resolved
-        // oh-my-opencode version when installation succeeds.
+        // oh-my-openagent version when installation succeeds.
         let packageManifest: [String: Any] = [
             "dependencies": [
                 Self.omoPluginName: "latest"
@@ -14816,6 +15175,30 @@ struct CMUXCLI {
         try process.run()
         process.waitUntilExit()
         return process.terminationStatus
+    }
+
+    private static func omoInstallingPluginMessage() -> String {
+        String(localized: "cli.omo.installingPlugin", defaultValue: "Installing \(Self.omoPluginName) plugin (this may take a minute on first run)...")
+    }
+
+    private static func omoRetryingInstallMessage() -> String {
+        String(localized: "cli.omo.retryingInstallCleanState", defaultValue: "Retrying \(Self.omoPluginName) install with a clean shadow package state...")
+    }
+
+    private static func omoInstallFailedMessage() -> String {
+        String(localized: "cli.omo.installFailed", defaultValue: "Failed to install \(Self.omoPluginName). Try manually: npm install -g \(Self.omoPluginName)")
+    }
+
+    private static func omoNoPackageManagerMessage() -> String {
+        String(localized: "cli.omo.noPackageManager", defaultValue: "Neither bun nor npm found in PATH. Install \(Self.omoPluginName) manually: bunx \(Self.omoPluginName) install")
+    }
+
+    private static func omoPluginInstalledMessage() -> String {
+        String(localized: "cli.omo.pluginInstalled", defaultValue: "\(Self.omoPluginName) plugin installed")
+    }
+
+    private func omoWriteStatus(_ message: String) {
+        FileHandle.standardError.write(Data((message + "\n").utf8))
     }
 
     private func omoRequestedPort(from commandArgs: [String]) -> String? {
@@ -14906,7 +15289,7 @@ struct CMUXCLI {
         return "4096"
     }
 
-    /// Creates a shadow config directory that layers oh-my-opencode on top of the user's
+    /// Creates a shadow config directory that layers oh-my-openagent on top of the user's
     /// existing opencode config without modifying the original. Sets OPENCODE_CONFIG_DIR
     /// to point at the shadow directory.
     private func omoEnsurePlugin() throws {
@@ -14930,7 +15313,9 @@ struct CMUXCLI {
             config = [:]
         }
 
-        var plugins = Self.openCodePluginListRemovingSessionPlugin((config["plugin"] as? [Any]) ?? [])
+        var plugins = Self.openCodePluginListNormalizingOMOPlugin(
+            Self.openCodePluginListRemovingSessionPlugin((config["plugin"] as? [Any]) ?? [])
+        )
         if !Self.openCodePluginListContains(plugins, spec: Self.omoPluginName, allowVersionSuffix: true) {
             plugins.append(Self.omoPluginName)
         }
@@ -14955,8 +15340,14 @@ struct CMUXCLI {
 
         try writeOpenCodeSessionPlugin(in: shadowDir)
 
-        // Copy oh-my-opencode plugin config (jsonc) if the user has one
-        for filename in ["oh-my-opencode.json", "oh-my-opencode.jsonc"] {
+        // Copy oh-my-openagent plugin config (jsonc) if the user has one.
+        // Keep legacy filenames visible in the shadow dir so existing setups still load.
+        for filename in [
+            "oh-my-openagent.json",
+            "oh-my-openagent.jsonc",
+            "oh-my-opencode.json",
+            "oh-my-opencode.jsonc"
+        ] {
             let userFile = userDir.appendingPathComponent(filename)
             let shadowFile = shadowDir.appendingPathComponent(filename)
             if fm.fileExists(atPath: userFile.path) && !fm.fileExists(atPath: shadowFile.path) {
@@ -14969,7 +15360,7 @@ struct CMUXCLI {
         if !fm.fileExists(atPath: pluginPackageDir.path) {
             let installDir = shadowDir
             if let bunPath = resolveExecutableInPath("bun") {
-                FileHandle.standardError.write("Installing oh-my-opencode plugin (this may take a minute on first run)...\n".data(using: .utf8)!)
+                omoWriteStatus(Self.omoInstallingPluginMessage())
                 let installArguments = ["add", Self.omoPluginName]
                 let firstAttemptStatus = try omoRunPackageInstall(
                     executablePath: bunPath,
@@ -14977,7 +15368,7 @@ struct CMUXCLI {
                     currentDirectoryURL: installDir
                 )
                 if firstAttemptStatus != 0 {
-                    FileHandle.standardError.write("Retrying oh-my-opencode install with a clean shadow package state...\n".data(using: .utf8)!)
+                    omoWriteStatus(Self.omoRetryingInstallMessage())
                     try? fm.removeItem(at: shadowBunLockURL)
                     try? fm.removeItem(at: shadowNodeModules)
                     try omoEnsureShadowNodeModulesSymlink(shadowNodeModules: shadowNodeModules, userNodeModules: userNodeModules)
@@ -14987,38 +15378,46 @@ struct CMUXCLI {
                         currentDirectoryURL: installDir
                     )
                     if retryStatus != 0 {
-                        throw CLIError(message: "Failed to install oh-my-opencode. Try manually: npm install -g oh-my-opencode")
+                        throw CLIError(message: Self.omoInstallFailedMessage())
                     }
                 }
             } else if let npmPath = resolveExecutableInPath("npm") {
-                FileHandle.standardError.write("Installing oh-my-opencode plugin (this may take a minute on first run)...\n".data(using: .utf8)!)
+                omoWriteStatus(Self.omoInstallingPluginMessage())
                 let status = try omoRunPackageInstall(
                     executablePath: npmPath,
                     arguments: ["install", Self.omoPluginName],
                     currentDirectoryURL: installDir
                 )
                 if status != 0 {
-                    throw CLIError(message: "Failed to install oh-my-opencode. Try manually: npm install -g oh-my-opencode")
+                    throw CLIError(message: Self.omoInstallFailedMessage())
                 }
             } else {
-                throw CLIError(message: "Neither bun nor npm found in PATH. Install oh-my-opencode manually: bunx oh-my-opencode install")
+                throw CLIError(message: Self.omoNoPackageManagerMessage())
             }
-            FileHandle.standardError.write("oh-my-opencode plugin installed\n".data(using: .utf8)!)
+            omoWriteStatus(Self.omoPluginInstalledMessage())
         }
 
-        // Ensure tmux mode is enabled in oh-my-opencode config.
+        // Ensure tmux mode is enabled in oh-my-openagent config.
         // Without this, the TmuxSessionManager won't spawn visual panes even though
         // $TMUX is set (tmux.enabled defaults to false).
-        let omoConfigURL = shadowDir.appendingPathComponent("oh-my-opencode.json")
+        let omoConfigURL = shadowDir.appendingPathComponent("oh-my-openagent.json")
         var omoConfig: [String: Any]
         if let data = try? Data(contentsOf: omoConfigURL),
            let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             omoConfig = existing
         } else {
-            // Check if user has a config we symlinked, read from source
-            let userOmoConfig = userDir.appendingPathComponent("oh-my-opencode.json")
-            if let data = try? Data(contentsOf: userOmoConfig),
-               let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            // Check if user has a current or legacy config and write the normalized
+            // shadow copy under the current package name.
+            let userOmoConfigURLs = [
+                userDir.appendingPathComponent("oh-my-openagent.json"),
+                userDir.appendingPathComponent("oh-my-opencode.json"),
+                shadowDir.appendingPathComponent("oh-my-opencode.json")
+            ]
+            if let existing = userOmoConfigURLs.lazy.compactMap({ url -> [String: Any]? in
+                guard let data = try? Data(contentsOf: url) else { return nil }
+                guard let object = try? JSONSerialization.jsonObject(with: data) else { return nil }
+                return object as? [String: Any]
+            }).first {
                 omoConfig = existing
                 // Remove the symlink so we can write our own copy
                 try? fm.removeItem(at: omoConfigURL)
@@ -15116,7 +15515,7 @@ struct CMUXCLI {
             }
         }
 
-        // Ensure oh-my-opencode plugin is registered and installed
+        // Ensure oh-my-openagent plugin is registered and installed
         try omoEnsurePlugin()
 
         let shimDirectory = try createOMOShimDirectory()
@@ -16742,6 +17141,18 @@ struct CMUXCLI {
                     markActive: shouldPromoteActiveSession,
                     turnId: parsedInput.turnId
                 )
+                if shouldPromoteActiveSession {
+                    publishAgentSurfaceResumeBinding(
+                        client: client,
+                        workspaceId: workspaceId,
+                        surfaceId: surfaceId,
+                        kind: "claude",
+                        displayName: String(localized: "cli.claude-hook.notification.title", defaultValue: "Claude Code"),
+                        sessionId: sessionId,
+                        cwd: parsedInput.cwd,
+                        launchCommand: launchCommand
+                    )
+                }
             }
             // Register PID for stale-session detection and OSC suppression.
             // Startup/resume SessionStart remains non-visible; /clear is a
@@ -16823,6 +17234,16 @@ struct CMUXCLI {
                         markActive: true,
                         allowsNewSessionReplacement: true
                     )
+                    publishAgentSurfaceResumeBinding(
+                        client: client,
+                        workspaceId: workspaceId,
+                        surfaceId: surfaceId,
+                        kind: "claude",
+                        displayName: String(localized: "cli.claude-hook.notification.title", defaultValue: "Claude Code"),
+                        sessionId: sessionId,
+                        cwd: parsedInput.cwd ?? mappedSession?.cwd,
+                        launchCommand: mappedSession?.launchCommand
+                    )
                 }
 
                 try? setClaudeStatus(
@@ -16894,6 +17315,16 @@ struct CMUXCLI {
                     isRestorable: true,
                     markActive: true,
                     turnId: parsedInput.turnId
+                )
+                publishAgentSurfaceResumeBinding(
+                    client: client,
+                    workspaceId: workspaceId,
+                    surfaceId: surfaceId,
+                    kind: "claude",
+                    displayName: String(localized: "cli.claude-hook.notification.title", defaultValue: "Claude Code"),
+                    sessionId: sessionId,
+                    cwd: parsedInput.cwd ?? mappedSession?.cwd,
+                    launchCommand: mappedSession?.launchCommand
                 )
             }
             _ = try sendV1Command("clear_notifications --tab=\(workspaceId)", client: client)
@@ -17002,6 +17433,12 @@ struct CMUXCLI {
             // as current only when the consumed session was the active one.
             if let consumedSession {
                 let workspaceId = consumedSession.workspaceId
+                clearAgentSurfaceResumeBinding(
+                    client: client,
+                    workspaceId: workspaceId,
+                    surfaceId: consumedSession.surfaceId,
+                    sessionId: consumedSession.sessionId
+                )
                 sendClaudeFeedTelemetry(workspaceId: workspaceId)
                 let shouldClearVisibleState = shouldApplyClaudeHookVisibleMutation(
                     sessionStore: sessionStore,
@@ -17470,6 +17907,68 @@ struct CMUXCLI {
         guard let ttyName = resolveCallerTTYName() else {
             return nil
         }
+        return resolveTerminalBinding(ttyName: ttyName, client: client)
+    }
+
+    private func resolveAgentProcessTerminalBinding(pid: Int?, client: SocketClient) -> CallerTerminalBinding? {
+        guard let pid else { return nil }
+        guard let payload = try? client.sendV2(
+            method: "system.top",
+            params: ["all_windows": true, "include_processes": true],
+            responseTimeout: 2.0
+        ) else {
+            return nil
+        }
+        let windows = payload["windows"] as? [[String: Any]] ?? []
+        for window in windows {
+            let workspaces = window["workspaces"] as? [[String: Any]] ?? []
+            for workspace in workspaces {
+                guard let workspaceId = normalizedHandleValue(workspace["id"] as? String)
+                    ?? normalizedHandleValue(workspace["ref"] as? String) else {
+                    continue
+                }
+                let panes = workspace["panes"] as? [[String: Any]] ?? []
+                for pane in panes {
+                    let surfaces = pane["surfaces"] as? [[String: Any]] ?? []
+                    for surface in surfaces {
+                        guard let surfaceId = normalizedHandleValue(surface["id"] as? String)
+                            ?? normalizedHandleValue(surface["ref"] as? String) else {
+                            continue
+                        }
+                        let topLevelPIDs = (surface["top_level_pids"] as? [Any] ?? [])
+                            .compactMap { Self.intValue($0) }
+                        if topLevelPIDs.contains(pid) {
+                            return CallerTerminalBinding(workspaceId: workspaceId, surfaceId: surfaceId)
+                        }
+                        let processes = surface["processes"] as? [[String: Any]] ?? []
+                        if topProcessTreeContainsPID(processes, pid: pid) {
+                            return CallerTerminalBinding(workspaceId: workspaceId, surfaceId: surfaceId)
+                        }
+                    }
+                }
+            }
+        }
+        return nil
+    }
+
+    private func topProcessTreeContainsPID(_ processes: [[String: Any]], pid: Int) -> Bool {
+        for process in processes {
+            if Self.intValue(process["pid"]) == pid {
+                return true
+            }
+            if let resources = process["resources"] as? [String: Any],
+               (resources["pids"] as? [Any] ?? []).compactMap({ Self.intValue($0) }).contains(pid) {
+                return true
+            }
+            if let children = process["children"] as? [[String: Any]],
+               topProcessTreeContainsPID(children, pid: pid) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func resolveTerminalBinding(ttyName: String, client: SocketClient) -> CallerTerminalBinding? {
         guard let payload = try? client.sendV2(method: "debug.terminals") else {
             return nil
         }
@@ -17561,10 +18060,10 @@ struct CMUXCLI {
         var compact: [String: Any] = [:]
 
         for key in [
-            "tool_name", "turn_id", "turnId",
+            "tool_name", "toolName", "turn_id", "turnId",
             "last_assistant_message", "lastAssistantMessage", "assistantPreamble", "assistant_preamble",
-            "event", "event_name", "hook_event_name", "type", "kind", "notification_type", "matcher", "reason", "source",
-            "message", "body", "text", "prompt", "error", "codex_error_info", "codexErrorInfo",
+            "event", "event_name", "hook_event_name", "hookEventName", "type", "kind", "notification_type", "matcher", "reason", "source",
+            "title", "summary", "message", "body", "text", "prompt", "error", "codex_error_info", "codexErrorInfo",
             "additional_details", "additionalDetails", "description",
         ] {
             if let value = compactClaudeHookValue(object[key], key: key) {
@@ -17624,7 +18123,7 @@ struct CMUXCLI {
             guard let nested = object[key] as? [String: Any] else { continue }
             var compactNested: [String: Any] = [:]
             for nestedKey in [
-                "type", "kind", "reason", "message", "body", "text", "prompt", "error",
+                "type", "kind", "reason", "title", "summary", "message", "body", "text", "prompt", "error",
                 "codex_error_info", "codexErrorInfo", "additional_details", "additionalDetails", "description",
             ] {
                 if let value = compactClaudeHookValue(nested[nestedKey], key: nestedKey) {
@@ -17641,9 +18140,9 @@ struct CMUXCLI {
 
     private func claudeHookCompactFieldLimit(for key: String) -> Int {
         switch key {
-        case "tool_name", "turn_id", "turnId", "event", "event_name", "hook_event_name", "type", "kind", "notification_type", "matcher", "reason", "source":
+        case "tool_name", "toolName", "turn_id", "turnId", "event", "event_name", "hook_event_name", "hookEventName", "type", "kind", "notification_type", "matcher", "reason", "source":
             return 80
-        case "last_assistant_message", "lastAssistantMessage", "assistantPreamble", "assistant_preamble", "message", "body", "text", "prompt", "error", "codex_error_info", "codexErrorInfo", "additional_details", "additionalDetails", "description":
+        case "last_assistant_message", "lastAssistantMessage", "assistantPreamble", "assistant_preamble", "title", "summary", "message", "body", "text", "prompt", "error", "codex_error_info", "codexErrorInfo", "additional_details", "additionalDetails", "description":
             return 240
         default:
             return 160
@@ -18545,7 +19044,12 @@ struct CMUXCLI {
         }
     }
 
-    private func retireCodexMonitorLeases(sessionId: String, turnId: String?, env: [String: String]) {
+    private func retireCodexMonitorLeases(
+        sessionId: String,
+        turnId: String?,
+        preservingLeasePath: String? = nil,
+        env: [String: String]
+    ) {
         let normalizedSessionId = sessionId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedSessionId.isEmpty else { return }
 
@@ -18553,6 +19057,9 @@ struct CMUXCLI {
         let now = Date().timeIntervalSince1970
         let normalizedTurnId = turnId?.trimmingCharacters(in: .whitespacesAndNewlines)
         let shouldMatchTurn = normalizedTurnId?.isEmpty == false
+        let preservingPath = preservingLeasePath.map {
+            URL(fileURLWithPath: $0, isDirectory: false).standardizedFileURL.path
+        }
         let directory = codexMonitorLeaseDirectory(env: env)
         let targetPaths = ((try? fileManager.contentsOfDirectory(
             at: directory,
@@ -18561,6 +19068,10 @@ struct CMUXCLI {
         )) ?? []).map(\.path)
 
         for path in targetPaths {
+            let standardizedPath = URL(fileURLWithPath: path, isDirectory: false).standardizedFileURL.path
+            guard preservingPath == nil || standardizedPath != preservingPath else {
+                continue
+            }
             guard var record = readCodexMonitorLease(path: path),
                   record.sessionId == normalizedSessionId,
                   !shouldMatchTurn || record.turnId == normalizedTurnId,
@@ -18898,6 +19409,305 @@ struct CMUXCLI {
         return classified
     }
 
+    private func summarizeAgentHookNotification(
+        def: AgentHookDef,
+        parsedInput: ClaudeHookParsedInput,
+        cwd: String?,
+        env: [String: String],
+        sessionId: String?
+    ) -> AgentHookNotificationSummary {
+        guard let object = parsedInput.object else {
+            if let fallback = parsedInput.rawFallback, !fallback.isEmpty {
+                return classifyAgentHookNotification(
+                    def: def,
+                    signal: fallback,
+                    message: fallback,
+                    isFallback: false
+                )
+            }
+            let body = String.localizedStringWithFormat(
+                String(localized: "agent.generic.notification.body.sentNotification", defaultValue: "%@ sent a notification"),
+                def.displayName
+            )
+            return classifyAgentHookNotification(def: def, signal: "", message: body, isFallback: true)
+        }
+
+        let nested = (object["notification"] as? [String: Any]) ?? (object["data"] as? [String: Any]) ?? [:]
+        let signalParts = [
+            firstString(in: object, keys: ["event", "event_name", "hook_event_name", "hookEventName", "type", "kind"]),
+            firstString(in: object, keys: ["notification_type", "matcher", "reason"]),
+            firstString(in: nested, keys: ["type", "kind", "reason"]),
+        ]
+        let messageCandidates = [
+            firstString(in: object, keys: ["message", "body", "text", "prompt", "summary", "description", "error", "title"]),
+            firstString(in: nested, keys: ["message", "body", "text", "prompt", "summary", "description", "error", "title"]),
+        ]
+        let fallbackBody = String.localizedStringWithFormat(
+            String(localized: "agent.generic.notification.body.sentNotification", defaultValue: "%@ sent a notification"),
+            def.displayName
+        )
+        let message = messageCandidates.compactMap { $0 }.first ?? fallbackBody
+        let signal = signalParts.compactMap { $0 }.joined(separator: " ")
+        let normalizedMessage = normalizedSingleLine(message)
+        if let grokSummary = summarizeGrokAssistantCompletionNotification(
+            def: def,
+            message: normalizedMessage,
+            cwd: cwd,
+            env: env,
+            sessionId: sessionId,
+            matchesMessage: isGrokGenericTurnCompletion
+        ) {
+            return grokSummary
+        }
+        if def.name == "grok", isGrokGenericTurnCompletion(normalizedMessage) {
+            return AgentHookNotificationSummary(
+                subtitle: String(localized: "agent.generic.notification.subtitle.completed", defaultValue: "Completed"),
+                body: String(localized: "agent.generic.notification.body.taskCompleted", defaultValue: "Task completed"),
+                status: .idle,
+                isFallback: false
+            )
+        }
+        return classifyAgentHookNotification(
+            def: def,
+            signal: signal,
+            message: normalizedMessage,
+            isFallback: message == fallbackBody
+        )
+    }
+
+    private func summarizeGrokAssistantCompletionNotification(
+        def: AgentHookDef,
+        message: String,
+        cwd: String?,
+        env: [String: String],
+        sessionId: String?,
+        matchesMessage: (String) -> Bool
+    ) -> AgentHookNotificationSummary? {
+        guard def.name == "grok",
+              matchesMessage(message),
+              let body = latestGrokAssistantMessage(
+                cwd: cwd,
+                sessionId: sessionId,
+                env: env
+              ) else {
+            return nil
+        }
+        return AgentHookNotificationSummary(
+            subtitle: String(localized: "agent.generic.notification.subtitle.completed", defaultValue: "Completed"),
+            body: truncate(normalizedSingleLine(body), maxLength: 180),
+            status: .idle,
+            isFallback: false
+        )
+    }
+
+    private func normalizedAgentHookNotificationMessage(parsedInput: ClaudeHookParsedInput) -> String? {
+        guard let object = parsedInput.object else {
+            return parsedInput.rawFallback.map(normalizedSingleLine)
+        }
+        let nested = (object["notification"] as? [String: Any]) ?? (object["data"] as? [String: Any]) ?? [:]
+        let messageCandidates = [
+            firstString(in: object, keys: ["message", "body", "text", "prompt", "summary", "description", "error", "title"]),
+            firstString(in: nested, keys: ["message", "body", "text", "prompt", "summary", "description", "error", "title"]),
+        ]
+        return messageCandidates.compactMap { $0 }.first.map(normalizedSingleLine)
+    }
+
+    private func isGrokInternalSessionNotification(_ message: String) -> Bool {
+        let lowercasedMessage = message.lowercased()
+        return lowercasedMessage.hasPrefix("sessionnotification {")
+            || lowercasedMessage.contains("hookexecution {")
+            || lowercasedMessage.contains("event_name: user_prompt_submit")
+            || lowercasedMessage.contains(#""event_name":"user_prompt_submit""#)
+    }
+
+    private func isGrokGenericTurnCompletion(_ message: String) -> Bool {
+        message.range(
+            of: #"^turn complete(?:d)? in \d+(?:\.\d+)?s\.?$"#,
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil
+    }
+
+    private func latestGrokAssistantMessage(
+        cwd: String?,
+        sessionId: String?,
+        env: [String: String]
+    ) -> String? {
+        guard let sessionURL = grokSessionDirectory(cwd: cwd, sessionId: sessionId, env: env) else {
+            return nil
+        }
+        let historyURL = sessionURL.appendingPathComponent("chat_history.jsonl", isDirectory: false)
+        guard let tail = readTextFileTail(path: historyURL.path, maxBytes: 256 * 1024) else {
+            return nil
+        }
+
+        for line in tail.split(separator: "\n", omittingEmptySubsequences: true).reversed() {
+            guard let data = String(line).data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  (object["type"] as? String) == "assistant",
+                  let text = extractMessageText(from: object) else {
+                continue
+            }
+            let normalized = normalizedSingleLine(text)
+            if !normalized.isEmpty {
+                return normalized
+            }
+        }
+        return nil
+    }
+
+    private func grokSessionDirectory(
+        cwd: String?,
+        sessionId: String?,
+        env: [String: String]
+    ) -> URL? {
+        guard let cwd = cwd?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !cwd.isEmpty else {
+            return nil
+        }
+        let projectURL = grokSessionsRoot(env: env)
+            .appendingPathComponent(grokEncodedSessionCWD(cwd), isDirectory: true)
+        let fileManager = FileManager.default
+        var isDirectory = ObjCBool(false)
+        guard fileManager.fileExists(atPath: projectURL.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            return nil
+        }
+
+        if let sessionId = sessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !sessionId.isEmpty {
+            let sessionURL = projectURL.appendingPathComponent(sessionId, isDirectory: true)
+            if fileManager.fileExists(atPath: sessionURL.path, isDirectory: &isDirectory),
+               isDirectory.boolValue {
+                return sessionURL
+            }
+            return nil
+        }
+
+        guard let sessionURLs = try? fileManager.contentsOfDirectory(
+            at: projectURL,
+            includingPropertiesForKeys: [.contentModificationDateKey, .isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return nil
+        }
+
+        return sessionURLs
+            .filter { url in
+                ((try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false)
+                    && fileManager.fileExists(atPath: url.appendingPathComponent("chat_history.jsonl").path)
+            }
+            .max { lhs, rhs in
+                let leftDate = (try? lhs
+                    .appendingPathComponent("chat_history.jsonl")
+                    .resourceValues(forKeys: [.contentModificationDateKey])
+                    .contentModificationDate) ?? .distantPast
+                let rightDate = (try? rhs
+                    .appendingPathComponent("chat_history.jsonl")
+                    .resourceValues(forKeys: [.contentModificationDateKey])
+                    .contentModificationDate) ?? .distantPast
+                return leftDate < rightDate
+            }
+    }
+
+    private func grokSessionsRoot(env: [String: String]) -> URL {
+        let rawHome = normalizedHookValue(env["GROK_HOME"]) ?? "~/.grok"
+        return URL(fileURLWithPath: NSString(string: rawHome).expandingTildeInPath, isDirectory: true)
+            .appendingPathComponent("sessions", isDirectory: true)
+    }
+
+    private func grokEncodedSessionCWD(_ cwd: String) -> String {
+        var encoded = ""
+        for byte in cwd.utf8 {
+            let isUnreserved = (byte >= 0x41 && byte <= 0x5A)
+                || (byte >= 0x61 && byte <= 0x7A)
+                || (byte >= 0x30 && byte <= 0x39)
+                || byte == 0x2D
+                || byte == 0x2E
+                || byte == 0x5F
+                || byte == 0x7E
+            if isUnreserved {
+                encoded.append(Character(UnicodeScalar(byte)))
+            } else {
+                encoded.append(String(format: "%%%02X", byte))
+            }
+        }
+        return encoded
+    }
+
+    private func classifyAgentHookNotification(
+        def: AgentHookDef,
+        signal: String,
+        message: String,
+        isFallback: Bool
+    ) -> AgentHookNotificationSummary {
+        let lower = "\(signal) \(message)".lowercased()
+        if lower.contains("permission") || lower.contains("approve") || lower.contains("approval") || lower.contains("permission_prompt") {
+            let body = message.isEmpty
+                ? String(localized: "agent.generic.notification.body.approvalNeeded", defaultValue: "Approval needed")
+                : message
+            return AgentHookNotificationSummary(
+                subtitle: String(localized: "agent.generic.notification.subtitle.permission", defaultValue: "Permission"),
+                body: truncate(body, maxLength: 180),
+                status: .needsInput,
+                isFallback: isFallback
+            )
+        }
+        if lower.contains("error") || lower.contains("failed") || lower.contains("failure") || lower.contains("exception") {
+            let body = message.isEmpty
+                ? String.localizedStringWithFormat(
+                    String(localized: "agent.generic.notification.body.reportedError", defaultValue: "%@ reported an error"),
+                    def.displayName
+                )
+                : message
+            return AgentHookNotificationSummary(
+                subtitle: String(localized: "agent.generic.notification.subtitle.error", defaultValue: "Error"),
+                body: truncate(body, maxLength: 180),
+                status: .error,
+                isFallback: isFallback
+            )
+        }
+        if containsCompletionCue(lower) {
+            let body = message.isEmpty
+                ? String(localized: "agent.generic.notification.body.taskCompleted", defaultValue: "Task completed")
+                : message
+            return AgentHookNotificationSummary(
+                subtitle: String(localized: "agent.generic.notification.subtitle.completed", defaultValue: "Completed"),
+                body: truncate(body, maxLength: 180),
+                status: .idle,
+                isFallback: isFallback
+            )
+        }
+        if containsWaitingCue(lower) {
+            let body = message.isEmpty
+                ? String(localized: "agent.generic.notification.body.waitingForInput", defaultValue: "Waiting for input")
+                : message
+            return AgentHookNotificationSummary(
+                subtitle: String(localized: "agent.generic.notification.subtitle.waiting", defaultValue: "Waiting"),
+                body: truncate(body, maxLength: 180),
+                status: .needsInput,
+                isFallback: isFallback
+            )
+        }
+        if !message.isEmpty {
+            return AgentHookNotificationSummary(
+                subtitle: String(localized: "agent.generic.notification.subtitle.attention", defaultValue: "Attention"),
+                body: truncate(message, maxLength: 180),
+                status: nil,
+                isFallback: isFallback
+            )
+        }
+        let body = String.localizedStringWithFormat(
+            String(localized: "agent.generic.notification.body.needsAttention", defaultValue: "%@ needs your attention"),
+            def.displayName
+        )
+        return AgentHookNotificationSummary(
+            subtitle: String(localized: "agent.generic.notification.subtitle.attention", defaultValue: "Attention"),
+            body: body,
+            status: .needsInput,
+            isFallback: true
+        )
+    }
+
     private func classifyClaudeNotification(signal: String, message: String) -> (subtitle: String, body: String) {
         let lower = "\(signal) \(message)".lowercased()
         if lower.contains("permission") || lower.contains("approve") || lower.contains("approval") || lower.contains("permission_prompt") {
@@ -18908,11 +19718,11 @@ struct CMUXCLI {
             let body = message.isEmpty ? "Claude reported an error" : message
             return ("Error", body)
         }
-        if lower.contains("complet") || lower.contains("finish") || lower.contains("done") || lower.contains("success") {
+        if containsCompletionCue(lower) {
             let body = message.isEmpty ? "Task completed" : message
             return ("Completed", body)
         }
-        if lower.contains("idle") || lower.contains("wait") || lower.contains("input") || lower.contains("idle_prompt") {
+        if containsWaitingCue(lower) {
             let body = message.isEmpty ? "Waiting for input" : message
             return ("Waiting", body)
         }
@@ -18921,6 +19731,55 @@ struct CMUXCLI {
             return ("Attention", message)
         }
         return ("Attention", "Claude needs your attention")
+    }
+
+    private func containsCompletionCue(_ lowercasedText: String) -> Bool {
+        notificationCueTokens(lowercasedText).contains { token in
+            token == "done"
+                || token == "succeed"
+                || token == "succeeded"
+                || token.hasPrefix("complet")
+                || token.hasPrefix("finish")
+                || token.hasPrefix("success")
+        }
+    }
+
+    private func containsWaitingCue(_ lowercasedText: String) -> Bool {
+        let tokens = notificationCueTokens(lowercasedText)
+        for (index, token) in tokens.enumerated() {
+            let previous = index > 0 ? tokens[index - 1] : nil
+            let next = index + 1 < tokens.count ? tokens[index + 1] : nil
+            if token == "idle" {
+                return true
+            }
+            if token == "wait" || token == "waiting" || token == "awaiting" {
+                return true
+            }
+            if token == "prompt", previous == "idle" || previous == "input" || previous == "user" {
+                return true
+            }
+            if token == "input" {
+                if previous == "need" || previous == "needs" || previous == "needed"
+                    || previous == "require" || previous == "requires" || previous == "required"
+                    || previous == "request" || previous == "requests" || previous == "requested"
+                    || previous == "wait" || previous == "waiting" || previous == "awaiting"
+                    || previous == "user" || previous == "your"
+                    || next == "needed" || next == "required" || next == "requested" {
+                    return true
+                }
+            }
+            if token == "question", lowercasedText.contains("?") || tokens.contains(where: {
+                $0 == "answer" || $0 == "respond" || $0 == "response" || $0 == "reply"
+                    || $0 == "choose" || $0 == "confirm" || $0 == "continue"
+            }) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func notificationCueTokens(_ lowercasedText: String) -> [Substring] {
+        lowercasedText.split { !$0.isLetter && !$0.isNumber }
     }
 
     private func firstString(in object: [String: Any], keys: [String]) -> String? {
@@ -19037,13 +19896,13 @@ struct CMUXCLI {
 
     // MARK: - Agent PID inference
 
-    private func inferredCodexAgentPID() -> Int? {
+    private func inferredAgentPID() -> Int? {
         var candidate = getppid()
         var remainingWrapperSkips = 8
 
         while candidate > 1, remainingWrapperSkips > 0 {
             guard let processName = processName(for: candidate) else { break }
-            if !codexHookWrapperProcessNames.contains(processName) {
+            if !agentHookWrapperProcessNames.contains(processName) {
                 break
             }
             let next = parentPID(of: candidate)
@@ -19181,6 +20040,258 @@ struct CMUXCLI {
         )
     }
 
+    private func publishAgentSurfaceResumeBinding(
+        client: SocketClient,
+        workspaceId: String,
+        surfaceId: String,
+        kind: String,
+        displayName: String,
+        sessionId: String,
+        cwd: String?,
+        launchCommand: AgentHookLaunchCommandRecord?
+    ) {
+        guard let command = agentSurfaceResumeCommand(
+            kind: kind,
+            sessionId: sessionId,
+            launchCommand: launchCommand,
+            workingDirectory: cwd
+        ) else {
+            clearAgentSurfaceResumeBinding(
+                client: client,
+                workspaceId: workspaceId,
+                surfaceId: surfaceId,
+                sessionId: sessionId
+            )
+            return
+        }
+        var params: [String: Any] = [
+            "surface_id": surfaceId,
+            "name": displayName,
+            "kind": kind,
+            "checkpoint_id": sessionId,
+            "source": "agent-hook",
+            "command": command,
+            "auto_resume": true
+        ]
+        if let cwd = normalizedHookValue(cwd) ?? normalizedHookValue(launchCommand?.workingDirectory) {
+            params["cwd"] = cwd
+        }
+        if let environment = agentSurfaceResumeEnvironment(kind: kind, environment: launchCommand?.environment),
+           !environment.isEmpty {
+            params["environment"] = environment
+        }
+        _ = try? client.sendV2(method: "surface.resume.set", params: params)
+    }
+
+    private func clearAgentSurfaceResumeBinding(
+        client: SocketClient,
+        workspaceId: String,
+        surfaceId: String,
+        sessionId: String?
+    ) {
+        let normalizedSessionId = normalizedHookValue(sessionId)
+        var params: [String: Any] = [
+            "surface_id": surfaceId,
+            "source": "agent-hook"
+        ]
+        if let normalizedSessionId {
+            params["checkpoint_id"] = normalizedSessionId
+        }
+        _ = try? client.sendV2(method: "surface.resume.clear", params: params)
+    }
+
+    private func agentSurfaceResumeCommand(
+        kind: String,
+        sessionId: String,
+        launchCommand: AgentHookLaunchCommandRecord?,
+        workingDirectory: String?
+    ) -> String? {
+        let normalizedSessionId = normalizedHookValue(sessionId)
+        guard let normalizedSessionId else { return nil }
+
+        let argv: [String]?
+        switch launchCommand?.launcher {
+        case "claudeTeams":
+            let original = agentSurfaceResumeCommandParts(launchCommand: launchCommand, fallbackExecutable: "cmux")
+            var tail = original.tail
+            let removedToken = tail.first == "claude-teams"
+            if removedToken { tail.removeFirst() }
+            argv = AgentLaunchSanitizer.preservedArguments(kind: "claude", args: tail).map {
+                agentSurfaceResumePrefixedArguments(
+                    executable: original.executable,
+                    token: "claude-teams",
+                    option: "--resume",
+                    sessionId: normalizedSessionId,
+                    preserved: $0
+                )
+            }
+        case "omo":
+            let original = agentSurfaceResumeCommandParts(launchCommand: launchCommand, fallbackExecutable: "cmux")
+            var tail = original.tail
+            let removedToken = tail.first == "omo"
+            if removedToken { tail.removeFirst() }
+            argv = AgentLaunchSanitizer.preservedArguments(kind: "opencode", args: tail).map {
+                agentSurfaceResumePrefixedArguments(
+                    executable: original.executable,
+                    token: "omo",
+                    option: "--session",
+                    sessionId: normalizedSessionId,
+                    preserved: $0
+                )
+            }
+        case "codexTeams":
+            let original = agentSurfaceResumeCommandParts(launchCommand: launchCommand, fallbackExecutable: "cmux")
+            var tail = original.tail
+            if tail.first == "codex-teams" { tail.removeFirst() }
+            argv = AgentLaunchSanitizer.preservedCodexForkArguments(args: tail).map {
+                [original.executable, "codex-teams", "resume", normalizedSessionId] + $0
+            }
+        case "omx", "omc":
+            argv = nil
+        default:
+            argv = agentSurfaceResumeArguments(kind: kind, sessionId: normalizedSessionId, launchCommand: launchCommand)
+        }
+
+        guard let argv, !argv.isEmpty else { return nil }
+        return agentSurfaceResumeShellCommand(
+            argv: argv,
+            workingDirectory: workingDirectory ?? launchCommand?.workingDirectory
+        )
+    }
+
+    private func agentSurfaceResumeArguments(
+        kind: String,
+        sessionId: String,
+        launchCommand: AgentHookLaunchCommandRecord?
+    ) -> [String]? {
+        switch kind {
+        case "claude":
+            return agentSurfaceResumeWithOption(kind: kind, launchCommand: launchCommand, fallbackExecutable: "claude", option: "--resume", sessionId: sessionId)
+        case "codex":
+            let original = agentSurfaceResumeCommandParts(launchCommand: launchCommand, fallbackExecutable: "codex")
+            return AgentLaunchSanitizer.preservedCodexForkArguments(args: original.tail).map {
+                [original.executable, "resume", sessionId] + $0
+            }
+        case "pi":
+            return agentSurfaceResumeWithOption(kind: kind, launchCommand: launchCommand, fallbackExecutable: "pi", option: "--session", sessionId: sessionId)
+        case "amp":
+            let original = agentSurfaceResumeCommandParts(launchCommand: launchCommand, fallbackExecutable: "amp")
+            return AgentLaunchSanitizer.preservedArguments(kind: kind, args: original.tail).map {
+                [original.executable, "threads", "continue"] + $0 + [sessionId]
+            }
+        case "cursor":
+            return agentSurfaceResumeWithOption(kind: kind, launchCommand: launchCommand, fallbackExecutable: "cursor-agent", option: "--resume", sessionId: sessionId)
+        case "gemini":
+            return agentSurfaceResumeWithOption(kind: kind, launchCommand: launchCommand, fallbackExecutable: "gemini", option: "--resume", sessionId: sessionId)
+        case "opencode":
+            let original = agentSurfaceResumeCommandParts(launchCommand: launchCommand, fallbackExecutable: "opencode")
+            return AgentLaunchSanitizer.preservedArguments(kind: kind, args: original.tail).map {
+                [original.executable, "--session", sessionId] + $0
+            }
+        case "rovodev":
+            let original = agentSurfaceResumeCommandParts(launchCommand: launchCommand, fallbackExecutable: "acli")
+            return AgentLaunchSanitizer.preservedArguments(kind: kind, args: original.tail).map {
+                [original.executable, "rovodev", "run", "--restore", sessionId] + $0
+            }
+        case "hermes-agent":
+            let original = agentSurfaceResumeCommandParts(launchCommand: launchCommand, fallbackExecutable: "hermes")
+            return AgentLaunchSanitizer.preservedArguments(kind: kind, args: original.tail).map {
+                [original.executable] + $0 + ["--resume", sessionId]
+            }
+        case "copilot":
+            return agentSurfaceResumeWithOption(kind: kind, launchCommand: launchCommand, fallbackExecutable: "copilot", option: "--resume", sessionId: sessionId)
+        case "codebuddy":
+            return agentSurfaceResumeWithOption(kind: kind, launchCommand: launchCommand, fallbackExecutable: "codebuddy", option: "--resume", sessionId: sessionId)
+        case "factory":
+            return agentSurfaceResumeWithOption(kind: kind, launchCommand: launchCommand, fallbackExecutable: "droid", option: "--resume", sessionId: sessionId)
+        case "qoder":
+            return agentSurfaceResumeWithOption(kind: kind, launchCommand: launchCommand, fallbackExecutable: "qodercli", option: "--resume", sessionId: sessionId)
+        default:
+            return nil
+        }
+    }
+
+    private func agentSurfaceResumeWithOption(
+        kind: String,
+        launchCommand: AgentHookLaunchCommandRecord?,
+        fallbackExecutable: String,
+        option: String,
+        sessionId: String
+    ) -> [String]? {
+        let original = agentSurfaceResumeCommandParts(launchCommand: launchCommand, fallbackExecutable: fallbackExecutable)
+        return AgentLaunchSanitizer.preservedArguments(kind: kind, args: original.tail).map {
+            [original.executable, option, sessionId] + $0
+        }
+    }
+
+    private func agentSurfaceResumePrefixedArguments(
+        executable: String,
+        token: String,
+        option: String,
+        sessionId: String,
+        preserved: [String]
+    ) -> [String] {
+        [executable, token, option, sessionId] + preserved
+    }
+
+    private func agentSurfaceResumeCommandParts(
+        launchCommand: AgentHookLaunchCommandRecord?,
+        fallbackExecutable: String
+    ) -> (executable: String, tail: [String]) {
+        let arguments = launchCommand?.arguments ?? []
+        let executable = normalizedHookValue(launchCommand?.executablePath)
+            ?? arguments.first
+            ?? fallbackExecutable
+        let tail = arguments.isEmpty ? [] : Array(arguments.dropFirst())
+        return (executable: executable, tail: tail)
+    }
+
+    private func agentSurfaceResumeShellCommand(
+        argv: [String],
+        workingDirectory: String?
+    ) -> String {
+        var commandParts: [String] = []
+        commandParts.append(contentsOf: argv)
+
+        var command = commandParts.map(cliShellQuote).joined(separator: " ")
+        if let cwd = normalizedHookValue(workingDirectory) {
+            command = "cd \(cliShellQuote(cwd)) && \(command)"
+        }
+        return command
+    }
+
+    private func agentSurfaceResumeEnvironment(
+        kind: String,
+        environment: [String: String]?
+    ) -> [String: String]? {
+        guard let environment else { return nil }
+        let selected = selectedAgentLaunchEnvironment(from: environment)
+        guard !selected.isEmpty else { return nil }
+
+        let claudeAuthKeys: Set<String> = [
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_BASE_URL",
+            "ANTHROPIC_MODEL",
+            "ANTHROPIC_SMALL_FAST_MODEL",
+            "CLAUDE_CODE_USE_BEDROCK",
+            "CLAUDE_CODE_USE_VERTEX",
+            "CLAUDE_CONFIG_DIR"
+        ]
+        var resolved = selected
+        if kind == "claude" {
+            let preservedClaudeKeys = selected.keys.sorted().filter { claudeAuthKeys.contains($0) }
+            if !preservedClaudeKeys.isEmpty {
+                for key in preservedClaudeKeys {
+                    resolved.removeValue(forKey: key)
+                }
+                resolved["CMUX_PRESERVE_CLAUDE_AUTH_SELECTION_ENV"] = "1"
+                resolved["CMUX_PRESERVE_CLAUDE_AUTH_SELECTION_ENV_KEYS"] = preservedClaudeKeys.joined(separator: ",")
+            }
+        }
+        return resolved
+    }
+
     private func decodeNULSeparatedBase64(_ rawValue: String?) -> [String]? {
         guard let rawValue = normalizedHookValue(rawValue),
               let data = Data(base64Encoded: rawValue) else {
@@ -19266,17 +20377,19 @@ struct CMUXCLI {
                 result[event.agentEvent] = entries
             case .nested(let timeoutMs):
                 var groups = result[event.agentEvent] as? [[String: Any]] ?? []
+                let timeout = nestedHookTimeout(timeoutMs, for: def)
                 groups.append([
-                    "hooks": [["type": "command", "command": cmd, "timeout": timeoutMs] as [String: Any]]
+                    "hooks": [["type": "command", "command": cmd, "timeout": timeout] as [String: Any]]
                 ] as [String: Any])
                 result[event.agentEvent] = groups
             case .rovoDevYAML, .hermesAgentYAML:
                 break
             }
         }
-        // Layer in Feed bridge entries with a long (120000 ms = 120s)
-        // timeout so blocking user decisions don't trip the agent's
-        // default per-event timeout.
+        // Layer in Feed bridge entries with a long timeout so blocking
+        // user decisions don't trip the agent's default per-event timeout.
+        // Most nested agents use milliseconds; Grok's current hook schema
+        // uses seconds, so `nestedHookTimeout` normalizes before writing.
         let feedTimeoutMs = 120_000
         for agentEvent in def.feedHookEvents {
             let feedCmd = feedHookCommand(for: def, agentEvent: agentEvent)
@@ -19287,8 +20400,9 @@ struct CMUXCLI {
                 result[agentEvent] = entries
             case .nested:
                 var groups = result[agentEvent] as? [[String: Any]] ?? []
+                let timeout = nestedHookTimeout(feedTimeoutMs, for: def)
                 groups.append([
-                    "hooks": [["type": "command", "command": feedCmd, "timeout": feedTimeoutMs] as [String: Any]]
+                    "hooks": [["type": "command", "command": feedCmd, "timeout": timeout] as [String: Any]]
                 ] as [String: Any])
                 result[agentEvent] = groups
             case .rovoDevYAML, .hermesAgentYAML:
@@ -19296,6 +20410,12 @@ struct CMUXCLI {
             }
         }
         return result
+    }
+
+    private func nestedHookTimeout(_ timeoutMs: Int, for def: AgentHookDef) -> Int {
+        guard def.name == "grok" else { return timeoutMs }
+        let positiveTimeoutMs = max(timeoutMs, 1)
+        return ((positiveTimeoutMs - 1) / 1000) + 1
     }
 
     private static let openCodeSessionPluginMarker = "cmux-opencode-session-plugin-marker"
@@ -19524,6 +20644,103 @@ export default CMUXSessionRestore;
             }
             return false
         }
+    }
+
+    private static func openCodePluginEntryName(_ entry: Any) -> String? {
+        if let string = entry as? String {
+            return string
+        }
+        if let tuple = entry as? [Any], let string = tuple.first as? String {
+            return string
+        }
+        return nil
+    }
+
+    private static func openCodePluginSpecIsPackage(_ value: String, packageName: String) -> Bool {
+        value == packageName || value.hasPrefix("\(packageName)@")
+    }
+
+    private static func openCodePluginSpecIsPinnedPackage(_ value: String, packageName: String) -> Bool {
+        value.hasPrefix("\(packageName)@")
+    }
+
+    private static func openCodePluginEntryReplacingPackage(
+        _ entry: Any,
+        packageName: String,
+        replacementPackageName: String
+    ) -> Any {
+        guard let name = openCodePluginEntryName(entry),
+              openCodePluginSpecIsPackage(name, packageName: packageName)
+        else {
+            return entry
+        }
+
+        let replacementName = "\(replacementPackageName)\(name.dropFirst(packageName.count))"
+        if entry is String {
+            return replacementName
+        }
+        if var tuple = entry as? [Any] {
+            tuple[0] = replacementName
+            return tuple
+        }
+        return entry
+    }
+
+    private static func openCodePluginEntryIsOMOPackage(_ entry: Any) -> Bool {
+        guard let name = openCodePluginEntryName(entry) else { return false }
+        return openCodePluginSpecIsPackage(name, packageName: omoPluginName)
+            || openCodePluginSpecIsPackage(name, packageName: legacyOmoPluginName)
+    }
+
+    private static func preferredOMOPluginEntry(from plugins: [Any]) -> Any? {
+        var currentPinnedEntry: Any?
+        var currentEntry: Any?
+        var legacyEntry: Any?
+
+        for entry in plugins {
+            guard let name = openCodePluginEntryName(entry) else { continue }
+            if openCodePluginSpecIsPackage(name, packageName: omoPluginName) {
+                if openCodePluginSpecIsPinnedPackage(name, packageName: omoPluginName) {
+                    if currentPinnedEntry == nil {
+                        currentPinnedEntry = entry
+                    }
+                } else if currentEntry == nil {
+                    currentEntry = entry
+                }
+                continue
+            }
+
+            if legacyEntry == nil,
+               openCodePluginSpecIsPackage(name, packageName: legacyOmoPluginName) {
+                legacyEntry = openCodePluginEntryReplacingPackage(
+                    entry,
+                    packageName: legacyOmoPluginName,
+                    replacementPackageName: omoPluginName
+                )
+            }
+        }
+
+        return currentPinnedEntry ?? currentEntry ?? legacyEntry
+    }
+
+    private static func openCodePluginListNormalizingOMOPlugin(_ plugins: [Any]) -> [Any] {
+        guard let preferredEntry = preferredOMOPluginEntry(from: plugins) else {
+            return plugins
+        }
+
+        var insertedOMOPlugin = false
+        var normalized: [Any] = []
+        for entry in plugins {
+            if openCodePluginEntryIsOMOPackage(entry) {
+                if !insertedOMOPlugin {
+                    normalized.append(preferredEntry)
+                    insertedOMOPlugin = true
+                }
+            } else {
+                normalized.append(entry)
+            }
+        }
+        return normalized
     }
 
     private static func openCodePluginListRemovingSessionPlugin(_ plugins: [Any]) -> [Any] {
@@ -19928,9 +21145,33 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
         let skipConfirm = ProcessInfo.processInfo.arguments.contains("--yes")
             || ProcessInfo.processInfo.arguments.contains("-y")
 
-        guard fm.fileExists(atPath: configDir) else {
-            print("~/\(def.configDir)/ does not exist. Install \(def.displayName) first.")
+        let configDirectoryFileError = String.localizedStringWithFormat(
+            String(
+                localized: "cli.hooks.error.configDirectoryIsFile",
+                defaultValue: "cmux could not create the hooks directory: a file exists at %@; remove or rename the conflicting file and re-run `cmux hooks setup`"
+            ),
+            configDir
+        )
+        var isConfigDirectory: ObjCBool = false
+        let configPathExists = fm.fileExists(atPath: configDir, isDirectory: &isConfigDirectory)
+        if configPathExists, !isConfigDirectory.boolValue {
+            if def.createConfigDirIfMissing {
+                throw CLIError(message: configDirectoryFileError)
+            }
+            print("Required agent configuration is missing. Run `cmux hooks setup` after installing your agent CLI.")
             return
+        }
+        if !configPathExists {
+            if def.createConfigDirIfMissing {
+                do {
+                    try fm.createDirectory(atPath: configDir, withIntermediateDirectories: true)
+                } catch {
+                    throw CLIError(message: configDirectoryFileError)
+                }
+            } else {
+                print("Required agent configuration is missing. Run `cmux hooks setup` after installing your agent CLI.")
+                return
+            }
         }
 
         var existing: [String: Any] = [:]
@@ -19969,7 +21210,11 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
                     }
                     rewrittenEntries.append(entry)
                 }
-                hooks[event] = rewrittenEntries.isEmpty ? nil : rewrittenEntries
+                if rewrittenEntries.isEmpty {
+                    hooks.removeValue(forKey: event)
+                } else {
+                    hooks[event] = rewrittenEntries
+                }
             case .nested:
                 guard let groups = value as? [[String: Any]] else { continue }
                 var rewrittenGroups: [[String: Any]] = []
@@ -19995,7 +21240,11 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
                     group["hooks"] = hookList
                     rewrittenGroups.append(group)
                 }
-                hooks[event] = rewrittenGroups.isEmpty ? nil : rewrittenGroups
+                if rewrittenGroups.isEmpty {
+                    hooks.removeValue(forKey: event)
+                } else {
+                    hooks[event] = rewrittenGroups
+                }
             case .rovoDevYAML, .hermesAgentYAML:
                 break
             }
@@ -20036,6 +21285,11 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
             hooksFilePath: filePath,
             def: def
         )
+        let codexHookTrustEscapedKeyPrefixes = Self.codexHookTrustEscapedKeyPrefixes(
+            hooksFilePath: filePath,
+            def: def
+        )
+        let codexLegacyHookTrustHashes = Self.codexLegacyHookTrustHashes(def: def)
 
         let newData = try JSONSerialization.data(withJSONObject: existing, options: [.prettyPrinted, .sortedKeys])
         let newString = String(data: newData, encoding: .utf8) ?? "{}"
@@ -20073,6 +21327,8 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
             print("\(def.displayName) hooks installed at \(filePath)")
         }
 
+        try pruneLegacyGrokHookFileIfNeeded(def: def, configDir: configDir, primaryFilePath: filePath)
+
         // Post-install actions
         if let action = def.postInstallAction {
             switch action {
@@ -20084,10 +21340,18 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
                 } else {
                     existingContent = ""
                 }
-                let featureContent = Self.codexConfigTomlInstallingHooksFeature(in: existingContent)
+                let trustClean = Self.codexConfigTomlRemovingHookTrust(
+                    in: existingContent,
+                    entries: codexHookTrustEntries,
+                    removingEscapedKeyPrefixes: codexHookTrustEscapedKeyPrefixes,
+                    removingTrustedHashes: codexLegacyHookTrustHashes
+                )
+                let featureContent = Self.codexConfigTomlInstallingHooksFeature(in: trustClean)
                 let trustInstall = Self.codexConfigTomlInstallingHookTrust(
                     in: featureContent,
-                    entries: codexHookTrustEntries
+                    entries: codexHookTrustEntries,
+                    removingEscapedKeyPrefixes: codexHookTrustEscapedKeyPrefixes,
+                    removingTrustedHashes: codexLegacyHookTrustHashes
                 )
                 let newContent = trustInstall.content
                 if newContent != existingContent {
@@ -20113,6 +21377,76 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
                 }
             }
         }
+    }
+
+    private func pruneLegacyGrokHookFileIfNeeded(
+        def: AgentHookDef,
+        configDir: String,
+        primaryFilePath: String
+    ) throws {
+        guard def.name == "grok" else { return }
+        let legacyURL = URL(fileURLWithPath: configDir, isDirectory: true)
+            .appendingPathComponent("cmux.json", isDirectory: false)
+        guard legacyURL.path != primaryFilePath,
+              FileManager.default.fileExists(atPath: legacyURL.path),
+              let data = FileManager.default.contents(atPath: legacyURL.path),
+              var json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              var hooks = json["hooks"] as? [String: Any] else {
+            return
+        }
+
+        let isCmuxOwnedCommand: (String) -> Bool = { cmd in
+            Self.isCmuxOwnedHookCommand(cmd, for: def)
+        }
+        var removed = 0
+        for (event, value) in hooks {
+            guard var entries = value as? [[String: Any]] else { continue }
+            let containsNestedGroups = entries.contains { $0["hooks"] is [[String: Any]] }
+            if !containsNestedGroups {
+                let before = entries.count
+                entries.removeAll { isCmuxOwnedCommand($0["command"] as? String ?? "") }
+                removed += before - entries.count
+                if entries.isEmpty {
+                    hooks.removeValue(forKey: event)
+                } else {
+                    hooks[event] = entries
+                }
+                continue
+            }
+            var rewrittenGroups: [[String: Any]] = []
+            for var group in entries {
+                guard var hookList = group["hooks"] as? [[String: Any]] else {
+                    rewrittenGroups.append(group)
+                    continue
+                }
+                let before = hookList.count
+                hookList.removeAll { isCmuxOwnedCommand($0["command"] as? String ?? "") }
+                removed += before - hookList.count
+                guard !hookList.isEmpty else { continue }
+                group["hooks"] = hookList
+                rewrittenGroups.append(group)
+            }
+            if rewrittenGroups.isEmpty {
+                hooks.removeValue(forKey: event)
+            } else {
+                hooks[event] = rewrittenGroups
+            }
+        }
+
+        guard removed > 0 else { return }
+        if hooks.isEmpty {
+            json.removeValue(forKey: "hooks")
+            if json.isEmpty {
+                try FileManager.default.removeItem(at: legacyURL)
+                print("Removed legacy \(def.displayName) hooks at \(legacyURL.path)")
+                return
+            }
+        } else {
+            json["hooks"] = hooks
+        }
+        let newData = try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
+        try newData.write(to: legacyURL, options: .atomic)
+        print("Removed \(removed) legacy \(def.displayName) cmux hook(s) from \(legacyURL.path)")
     }
 
     private func uninstallAgentHooks(_ def: AgentHookDef) throws {
@@ -20148,6 +21482,21 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
         }
 
         var hooks = json["hooks"] as? [String: Any] ?? [:]
+        let codexHookTrustEntriesToRemove = Self.codexHookTrustEntries(
+            hooks: hooks,
+            hooksFilePath: filePath,
+            def: def,
+            includeLegacyOwnedCommands: true
+        )
+        let codexStaleHookTrustHashesToRemove = Set(Self.codexHookTrustEntries(
+            hooks: buildHooksDict(for: def),
+            hooksFilePath: filePath,
+            def: def
+        ).map(\.trustedHash)).union(Self.codexLegacyHookTrustHashes(def: def))
+        let codexHookTrustEscapedKeyPrefixesToRemove = Self.codexHookTrustEscapedKeyPrefixes(
+            hooksFilePath: filePath,
+            def: def
+        )
         var removed = 0
 
         let isCmuxOwnedCommand: (String) -> Bool = { cmd in
@@ -20160,7 +21509,11 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
                 let before = entries.count
                 entries.removeAll { isCmuxOwnedCommand($0["command"] as? String ?? "") }
                 removed += before - entries.count
-                hooks[event] = entries.isEmpty ? nil : entries
+                if entries.isEmpty {
+                    hooks.removeValue(forKey: event)
+                } else {
+                    hooks[event] = entries
+                }
             case .nested:
                 guard let groups = value as? [[String: Any]] else { continue }
                 var rewrittenGroups: [[String: Any]] = []
@@ -20176,7 +21529,11 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
                     group["hooks"] = hookList
                     rewrittenGroups.append(group)
                 }
-                hooks[event] = rewrittenGroups.isEmpty ? nil : rewrittenGroups
+                if rewrittenGroups.isEmpty {
+                    hooks.removeValue(forKey: event)
+                } else {
+                    hooks[event] = rewrittenGroups
+                }
             case .rovoDevYAML, .hermesAgentYAML:
                 break
             }
@@ -20199,7 +21556,12 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
                 } catch {
                     throw CLIError(message: "\(configPath) exists but could not be read. Fix permissions or remove it before uninstalling \(def.displayName) hooks. \(String(describing: error))")
                 }
-                let newContent = Self.codexConfigTomlUninstallingHooksFeature(from: content)
+                let newContent = Self.codexConfigTomlUninstallingHooksFeature(
+                    from: content,
+                    removingHookTrustEntries: codexHookTrustEntriesToRemove,
+                    removingEscapedKeyPrefixes: codexHookTrustEscapedKeyPrefixesToRemove,
+                    removingTrustedHashes: codexStaleHookTrustHashesToRemove
+                )
                 if newContent != content {
                     try newContent.write(toFile: configPath, atomically: true, encoding: .utf8)
                     print("Removed Codex hooks feature from \(configPath)")
@@ -20213,7 +21575,7 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
         for event: String,
         to indexes: inout [String: [Int]]
     ) {
-        if indexes[event]?.last == index { return }
+        if indexes[event]?.isEmpty == false { return }
         indexes[event, default: []].append(index)
     }
 
@@ -20240,6 +21602,9 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
         "# cmux-codex-hook-trust-f5cc24da-7a09-4b20-a756-89e7786f6738 begin"
     private static let cmuxCodexHookTrustEnd =
         "# cmux-codex-hook-trust-f5cc24da-7a09-4b20-a756-89e7786f6738 end"
+    private static let codexHookTrustTableHeaderRegex = try! NSRegularExpression(
+        pattern: #"^\s*\[\s*hooks\s*\.\s*state\s*\.\s*"((?:[^"\\\n]|\\.)*)"\s*\]\s*(#.*)?$"#
+    )
 
     struct CodexHookTrustEntry: Equatable {
         let key: String
@@ -20260,9 +21625,6 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
     static func codexConfigTomlInstallingHooksFeature(in existingContent: String) -> String {
         var lines = tomlLines(from: existingContent)
         removeCmuxCodexHooksFeatureBlock(from: &lines)
-        if removeCmuxCodexHookTrustBlock(from: &lines) == .malformed {
-            stripMalformedCmuxCodexHookTrustMarker(from: &lines)
-        }
         lines.removeAll { tomlLineDefinesKey("codex_hooks", line: $0) }
         lines.removeAll { tomlLineDefinesDottedFeaturesKey("codex_hooks", line: $0) }
 
@@ -20324,34 +21686,75 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
         return lines
     }
 
-    static func codexConfigTomlUninstallingHooksFeature(from existingContent: String) -> String {
+    static func codexConfigTomlUninstallingHooksFeature(
+        from existingContent: String,
+        removingHookTrustEntries entries: [CodexHookTrustEntry] = [],
+        removingEscapedKeyPrefixes escapedKeyPrefixes: Set<String> = [],
+        removingTrustedHashes additionalTrustedHashes: Set<String> = []
+    ) -> String {
         var lines = tomlLines(from: existingContent)
+        let escapedKeys = Set(entries.map { tomlBasicStringContent($0.key) })
+        let trustedHashes = Set(entries.map(\.trustedHash)).union(additionalTrustedHashes)
         removeCmuxCodexHooksFeatureBlock(from: &lines)
-        if removeCmuxCodexHookTrustBlock(from: &lines) == .malformed {
+        if removeCmuxCodexHookTrustBlock(
+            from: &lines,
+            removingEscapedKeys: escapedKeys,
+            removingEscapedKeyPrefixes: escapedKeyPrefixes,
+            removingTrustedHashes: trustedHashes
+        ) == .malformed {
             stripMalformedCmuxCodexHookTrustMarker(from: &lines)
         }
+        removeCodexHookTrustTables(withEscapedKeys: escapedKeys, from: &lines)
         lines.removeAll { tomlLineDefinesKey("codex_hooks", line: $0) }
         lines.removeAll { tomlLineDefinesDottedFeaturesKey("codex_hooks", line: $0) }
         removeEmptyFeaturesTable(from: &lines)
         return tomlContent(from: lines)
     }
 
+    private static func codexConfigTomlRemovingHookTrust(
+        in existingContent: String,
+        entries: [CodexHookTrustEntry],
+        removingEscapedKeyPrefixes escapedKeyPrefixes: Set<String>,
+        removingTrustedHashes additionalTrustedHashes: Set<String> = []
+    ) -> String {
+        var lines = tomlLines(from: existingContent)
+        let escapedKeys = Set(entries.map { tomlBasicStringContent($0.key) })
+        let trustedHashes = Set(entries.map(\.trustedHash)).union(additionalTrustedHashes)
+        let removalResult = removeCmuxCodexHookTrustBlock(
+            from: &lines,
+            removingEscapedKeys: escapedKeys,
+            removingEscapedKeyPrefixes: escapedKeyPrefixes,
+            removingTrustedHashes: trustedHashes
+        )
+        if removalResult == .malformed {
+            stripMalformedCmuxCodexHookTrustMarker(from: &lines)
+        }
+        removeCodexHookTrustTables(withEscapedKeys: escapedKeys, from: &lines)
+        return tomlContent(from: lines)
+    }
+
     private static func codexConfigTomlInstallingHookTrust(
         in existingContent: String,
-        entries: [CodexHookTrustEntry]
+        entries: [CodexHookTrustEntry],
+        removingEscapedKeyPrefixes escapedKeyPrefixes: Set<String> = [],
+        removingTrustedHashes additionalTrustedHashes: Set<String> = []
     ) -> CodexHookTrustInstallResult {
         var lines = tomlLines(from: existingContent)
-        let removalResult = removeCmuxCodexHookTrustBlock(from: &lines)
+        let escapedKeys = Set(entries.map { tomlBasicStringContent($0.key) })
+        let trustedHashes = Set(entries.map(\.trustedHash)).union(additionalTrustedHashes)
+        let removalResult = removeCmuxCodexHookTrustBlock(
+            from: &lines,
+            removingEscapedKeys: escapedKeys,
+            removingEscapedKeyPrefixes: escapedKeyPrefixes,
+            removingTrustedHashes: trustedHashes
+        )
         if removalResult == .malformed {
             stripMalformedCmuxCodexHookTrustMarker(from: &lines)
         }
         guard !entries.isEmpty else {
             return CodexHookTrustInstallResult(content: tomlContent(from: lines), installedTrust: false)
         }
-        removeCodexHookTrustTables(
-            withEscapedKeys: Set(entries.map { tomlBasicStringContent($0.key) }),
-            from: &lines
-        )
+        removeCodexHookTrustTables(withEscapedKeys: escapedKeys, from: &lines)
 
         if !lines.isEmpty, lines.last?.isEmpty == false {
             lines.append("")
@@ -20368,11 +21771,12 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
     static func codexHookTrustEntries(
         hooks: [String: Any],
         hooksFilePath: String,
-        def: AgentHookDef
+        def: AgentHookDef,
+        includeLegacyOwnedCommands: Bool = false
     ) -> [CodexHookTrustEntry] {
         guard def.name == "codex" else { return [] }
         let isOwnedCommand: (String) -> Bool = { command in
-            isCmuxOwnedHookCommand(command, for: def, includeLegacy: false)
+            isCmuxOwnedHookCommand(command, for: def, includeLegacy: includeLegacyOwnedCommands)
         }
         var entries: [CodexHookTrustEntry] = []
         let keySource = codexNormalizedHookSourcePath(hooksFilePath)
@@ -20406,6 +21810,62 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
         }
 
         return entries
+    }
+
+    private static func codexHookTrustEscapedKeyPrefixes(
+        hooksFilePath: String,
+        def: AgentHookDef
+    ) -> Set<String> {
+        guard def.name == "codex" else { return [] }
+        return [tomlBasicStringContent("\(codexNormalizedHookSourcePath(hooksFilePath)):")]
+    }
+
+    private static func codexLegacyHookTrustHashes(def: AgentHookDef) -> Set<String> {
+        guard def.name == "codex" else { return [] }
+        let hookTimeoutMs: Int
+        if case .nested(let timeoutMs) = def.format {
+            hookTimeoutMs = timeoutMs
+        } else {
+            hookTimeoutMs = 600
+        }
+
+        var hashes = Set<String>()
+        func insertHashes(eventLabel: String, command: String, timeouts: [Int]) {
+            let commands = [
+                command,
+                "[ -n \"$CMUX_SURFACE_ID\" ] && [ \"$\(def.disableEnvVar)\" != \"1\" ] && command -v cmux >/dev/null 2>&1 && \(command) || echo '{}'",
+            ]
+            for command in commands {
+                for timeout in timeouts {
+                    hashes.insert(codexCommandHookHash(
+                        eventLabel: eventLabel,
+                        matcher: nil,
+                        command: command,
+                        timeoutMs: timeout,
+                        statusMessage: nil
+                    ))
+                }
+            }
+        }
+
+        for event in def.events {
+            guard let eventLabel = codexHookEventLabel(event.agentEvent) else { continue }
+            insertHashes(
+                eventLabel: eventLabel,
+                command: "cmux codex-hook \(event.cmuxSubcommand)",
+                timeouts: [hookTimeoutMs, 600]
+            )
+        }
+
+        for agentEvent in def.feedHookEvents {
+            guard let eventLabel = codexHookEventLabel(agentEvent) else { continue }
+            insertHashes(
+                eventLabel: eventLabel,
+                command: "cmux feed-hook --source \(def.name) --event \(agentEvent)",
+                timeouts: [120_000, 600]
+            )
+        }
+        return hashes
     }
 
     private static func codexNormalizedHookSourcePath(_ path: String) -> String {
@@ -20657,8 +22117,13 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
     }
 
     @discardableResult
-    private static func removeCmuxCodexHookTrustBlock(from lines: inout [String]) -> CodexHookTrustBlockRemovalResult {
-        var ranges: [ClosedRange<Int>] = []
+    private static func removeCmuxCodexHookTrustBlock(
+        from lines: inout [String],
+        removingEscapedKeys escapedKeys: Set<String> = [],
+        removingEscapedKeyPrefixes escapedKeyPrefixes: Set<String> = [],
+        removingTrustedHashes trustedHashes: Set<String> = []
+    ) -> CodexHookTrustBlockRemovalResult {
+        var replacements: [(range: ClosedRange<Int>, lines: [String])] = []
         var index = 0
         while index < lines.count {
             guard lines[index] == cmuxCodexHookTrustBegin else {
@@ -20669,14 +22134,94 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
             guard let endIndex = lines[index...].firstIndex(of: cmuxCodexHookTrustEnd) else {
                 return .malformed
             }
-            ranges.append(index...endIndex)
+            let preservedLines = codexHookTrustBlockUnownedLines(
+                from: lines[(index + 1)..<endIndex],
+                removingEscapedKeys: escapedKeys,
+                removingEscapedKeyPrefixes: escapedKeyPrefixes,
+                removingTrustedHashes: trustedHashes
+            )
+            replacements.append((index...endIndex, preservedLines))
             index = endIndex + 1
         }
 
-        for range in ranges.reversed() {
-            lines.removeSubrange(range)
+        for replacement in replacements.reversed() {
+            lines.replaceSubrange(replacement.range, with: replacement.lines)
         }
-        return ranges.isEmpty ? .notFound : .removed
+        return replacements.isEmpty ? .notFound : .removed
+    }
+
+    private static func codexHookTrustBlockUnownedLines(
+        from lines: ArraySlice<String>,
+        removingEscapedKeys escapedKeys: Set<String>,
+        removingEscapedKeyPrefixes escapedKeyPrefixes: Set<String>,
+        removingTrustedHashes trustedHashes: Set<String>
+    ) -> [String] {
+        var preserved: [String] = []
+        var index = lines.startIndex
+        while index < lines.endIndex {
+            if let escapedKey = codexHookTrustTableEscapedKey(from: lines[index]) {
+                let tableStart = index
+                index += 1
+                while index < lines.endIndex, !tomlLineIsCodexHookTrustBlockTableBoundary(lines[index]) {
+                    index += 1
+                }
+                if !codexHookTrustEscapedKeyIsRemoved(
+                    escapedKey,
+                    trustedHash: codexHookTrustTrustedHash(from: lines[tableStart..<index]),
+                    removingEscapedKeys: escapedKeys,
+                    removingEscapedKeyPrefixes: escapedKeyPrefixes,
+                    removingTrustedHashes: trustedHashes
+                ) {
+                    preserved.append(contentsOf: lines[tableStart..<index])
+                }
+                continue
+            }
+
+            guard tomlLineIsAnyTableHeader(lines[index]) else {
+                // Marker drift can capture user config lines; only cmux-owned
+                // hook trust tables are safe to discard.
+                preserved.append(lines[index])
+                index += 1
+                continue
+            }
+            let tableStart = index
+            index += 1
+            while index < lines.endIndex, !tomlLineIsCodexHookTrustBlockTableBoundary(lines[index]) {
+                index += 1
+            }
+            preserved.append(contentsOf: lines[tableStart..<index])
+        }
+        return preserved
+    }
+
+    private static func codexHookTrustEscapedKeyIsRemoved(
+        _ escapedKey: String,
+        trustedHash: String?,
+        removingEscapedKeys escapedKeys: Set<String>,
+        removingEscapedKeyPrefixes escapedKeyPrefixes: Set<String>,
+        removingTrustedHashes trustedHashes: Set<String>
+    ) -> Bool {
+        if escapedKeys.contains(escapedKey) {
+            return true
+        }
+        guard let trustedHash, trustedHashes.contains(trustedHash) else {
+            return false
+        }
+        return escapedKeyPrefixes.contains { escapedKey.hasPrefix($0) }
+    }
+
+    private static func codexHookTrustTrustedHash(from lines: ArraySlice<String>) -> String? {
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard let equalsIndex = trimmed.firstIndex(of: "=") else { continue }
+            let key = String(trimmed[..<equalsIndex]).trimmingCharacters(in: .whitespaces)
+            guard key == "trusted_hash" else { continue }
+            let valueStart = trimmed.index(after: equalsIndex)
+            let value = String(trimmed[valueStart...]).trimmingCharacters(in: .whitespaces)
+            guard value.hasPrefix("\""), value.hasSuffix("\""), value.count >= 2 else { continue }
+            return String(value.dropFirst().dropLast())
+        }
+        return nil
     }
 
     private static func stripMalformedCmuxCodexHookTrustMarker(from lines: inout [String]) {
@@ -20692,19 +22237,33 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
                 index += 1
                 continue
             }
-            let endIndex = tomlTableEndIndex(in: lines, after: index)
+            let endIndex = codexHookTrustTableEndIndex(in: lines, after: index)
             lines.removeSubrange(index..<endIndex)
         }
     }
 
+    private static func codexHookTrustTableEndIndex(in lines: [String], after tableStart: Int) -> Int {
+        var index = tableStart + 1
+        while index < lines.count {
+            if tomlLineIsCodexHookTrustBlockTableBoundary(lines[index]) {
+                return index
+            }
+            index += 1
+        }
+        return lines.count
+    }
+
     private static func codexHookTrustTableEscapedKey(from line: String) -> String? {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        let prefix = "[hooks.state.\""
-        let suffix = "\"]"
-        guard trimmed.hasPrefix(prefix), trimmed.hasSuffix(suffix) else {
+        let range = NSRange(line.startIndex..<line.endIndex, in: line)
+        guard let match = codexHookTrustTableHeaderRegex.firstMatch(in: line, range: range),
+              let keyRange = Range(match.range(at: 1), in: line) else {
             return nil
         }
-        return String(trimmed.dropFirst(prefix.count).dropLast(suffix.count))
+        return String(line[keyRange])
+    }
+
+    private static func tomlLineIsCodexHookTrustBlockTableBoundary(_ line: String) -> Bool {
+        codexHookTrustTableEscapedKey(from: line) != nil || tomlLineIsAnyTableHeader(line)
     }
 
     private static func tomlLineIsCodexHooksFeatureBegin(_ line: String) -> Bool {
@@ -20783,10 +22342,69 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
             return
         }
 
-        // Workspace/surface resolution: prefer --workspace/--surface flags, then session store, then env
+        // Workspace/surface resolution: prefer --workspace/--surface flags,
+        // then env, then the caller process. Grok strips CMUX_* from hook
+        // subprocesses, so PID attribution is the only reliable live binding.
+        let inferredPID = inferredAgentPID()
         let hookWsFlag = optionValue(hookArgs, name: "--workspace")
-        let workspaceArg = hookWsFlag ?? env["CMUX_WORKSPACE_ID"]
-        let surfaceArg = optionValue(hookArgs, name: "--surface") ?? (hookWsFlag == nil ? env["CMUX_SURFACE_ID"] : nil)
+        let directWorkspaceArg = hookWsFlag ?? normalizedHookValue(env["CMUX_WORKSPACE_ID"])
+        let directSurfaceArg = optionValue(hookArgs, name: "--surface")
+            ?? (hookWsFlag == nil ? normalizedHookValue(env["CMUX_SURFACE_ID"]) : nil)
+        func resolveAccessibleWorkspaceId(_ raw: String?) -> String? {
+            guard let raw = nonEmptyClaudeHookIdentifier(raw) else {
+                return nil
+            }
+            guard let candidate = try? resolveWorkspaceId(raw, client: client),
+                  (try? client.sendV2(method: "surface.list", params: ["workspace_id": candidate])) != nil else {
+                return nil
+            }
+            return candidate
+        }
+        func resolveAccessibleSurfaceId(_ raw: String?, workspaceId: String) -> String? {
+            guard let raw = nonEmptyClaudeHookIdentifier(raw),
+                  let candidate = try? resolveSurfaceId(raw, workspaceId: workspaceId, client: client),
+                  let listed = try? client.sendV2(method: "surface.list", params: ["workspace_id": workspaceId]) else {
+                return nil
+            }
+            let items = listed["surfaces"] as? [[String: Any]] ?? []
+            return items.contains(where: {
+                ($0["id"] as? String) == candidate || ($0["ref"] as? String) == candidate
+            }) ? candidate : nil
+        }
+        func resolveDefaultSurfaceId(workspaceId: String) -> String? {
+            try? resolveSurfaceId(nil, workspaceId: workspaceId, client: client)
+        }
+        let resolvedDirectWorkspaceArg = resolveAccessibleWorkspaceId(directWorkspaceArg)
+        let hasInvalidDirectWorkspaceArg = directWorkspaceArg != nil && resolvedDirectWorkspaceArg == nil
+        var processBindingCache: CallerTerminalBinding?
+        var didResolveProcessBinding = false
+        func processBinding() -> CallerTerminalBinding? {
+            if !didResolveProcessBinding {
+                didResolveProcessBinding = true
+                guard directWorkspaceArg == nil || directSurfaceArg == nil else {
+                    return nil
+                }
+                processBindingCache = resolveCallerTerminalBindingByTTY(client: client)
+                    ?? resolveAgentProcessTerminalBinding(pid: inferredPID, client: client)
+            }
+            return processBindingCache
+        }
+#if DEBUG
+        func processBindingDebugState() -> String {
+            guard didResolveProcessBinding else { return "deferred" }
+            return processBindingCache == nil ? "nil" : "resolved"
+        }
+#endif
+        let resolvedDirectSurfaceArg: String? = {
+            guard let directSurfaceArg else { return nil }
+            guard let workspaceId = resolvedDirectWorkspaceArg ?? processBinding()?.workspaceId else { return nil }
+            return resolveAccessibleSurfaceId(directSurfaceArg, workspaceId: workspaceId)
+        }()
+        let hasInvalidDirectSurfaceArg = directSurfaceArg != nil && resolvedDirectSurfaceArg == nil
+        let hasUnusableDirectBinding = hasInvalidDirectWorkspaceArg || hasInvalidDirectSurfaceArg
+        func workspaceArg() -> String? {
+            resolvedDirectWorkspaceArg ?? processBinding()?.workspaceId
+        }
 
         let rawInput = String(data: FileHandle.standardInput.readDataToEndOfFile(), encoding: .utf8) ?? ""
         let input = parseClaudeHookInput(rawInput: rawInput)
@@ -20803,8 +22421,47 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
             ?? normalizedHookValue(env["PWD"])
         let sessionId = resolvedAgentHookSessionId(def: def, input: input, env: env, cwd: hookCwd)
         let action = Self.subcommandActions[subcommand] ?? .noop
+#if DEBUG
+        agentHookDebugLog(
+            "agentHook.start agent=\(def.name) subcommand=\(subcommand) session=\(agentHookDebugShort(sessionId)) inputSession=\(agentHookDebugShort(input.sessionId)) rawBytes=\(rawInput.utf8.count) hasCwd=\(hookCwd == nil ? 0 : 1) envWorkspace=\(env["CMUX_WORKSPACE_ID"] == nil ? 0 : 1) envSurface=\(env["CMUX_SURFACE_ID"] == nil ? 0 : 1) directWorkspace=\(directWorkspaceArg == nil ? 0 : 1) directSurface=\(directSurfaceArg == nil ? 0 : 1) invalidDirect=\(hasUnusableDirectBinding ? 1 : 0) processBinding=\(processBindingDebugState()) socketName=\(agentHookDebugSocketName(client.socketPath))",
+            socketPath: client.socketPath,
+            env: env
+        )
+#endif
         let pidKey = "\(def.statusKey).\(sessionId.isEmpty ? "default" : sessionId)"
         var didSendFeedTelemetry = false
+        func runtimeStatus(for notificationStatus: AgentHookNotificationStatus?) -> AgentHookRuntimeStatus? {
+            switch notificationStatus {
+            case .idle?:
+                return .idle
+            case .needsInput?:
+                return .needsInput
+            case .error?:
+                return .error
+            case nil:
+                return nil
+            }
+        }
+        func hasOtherRunningSession(workspaceId: String) -> Bool {
+            (try? store.hasRunningSession(workspaceId: workspaceId, excludingSessionId: sessionId)) == true
+        }
+        func setIdleStatusUnlessAnotherSessionIsRunning(workspaceId: String, surfaceId: String) {
+            if hasOtherRunningSession(workspaceId: workspaceId) {
+#if DEBUG
+                agentHookDebugLog(
+                    "agentHook.status.keepRunning agent=\(def.name) session=\(agentHookDebugShort(sessionId)) workspace=\(agentHookDebugShort(workspaceId)) surface=\(agentHookDebugShort(surfaceId))",
+                    socketPath: client.socketPath,
+                    env: env
+                )
+#endif
+                return
+            }
+            let idleStatus = String(localized: "agent.generic.notification.status.idle", defaultValue: "Idle")
+            _ = try? sendV1Command(
+                "set_status \(def.statusKey) \(idleStatus) --icon=pause.circle.fill --color=#8E8E93 --tab=\(workspaceId)\(socketPanelOption(surfaceId))",
+                client: client
+            )
+        }
         func sendAgentFeedTelemetry(workspaceId: String? = nil) {
             didSendFeedTelemetry = true
             sendFeedTelemetry(
@@ -20812,8 +22469,105 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
                 source: def.name,
                 subcommand: subcommand,
                 parsedInput: input,
-                workspaceId: workspaceId ?? workspaceArg
+                workspaceId: workspaceId ?? workspaceArg()
             )
+        }
+        func notificationDedupeFingerprint(status: AgentHookNotificationStatus?) -> String? {
+            guard def.name == "grok", !sessionId.isEmpty, status == .idle else {
+                return nil
+            }
+            return "idle-turn"
+        }
+        func shouldSendNotification(fingerprint: String?) -> Bool {
+            guard let fingerprint else { return true }
+            return (try? store.recentlyEmittedNotification(sessionId: sessionId, fingerprint: fingerprint)) != true
+        }
+        func markNotificationSent(fingerprint: String?) {
+            guard let fingerprint else { return }
+            try? store.markNotificationEmitted(sessionId: sessionId, fingerprint: fingerprint)
+        }
+        func resolveAgentHookTarget(mapped: ClaudeHookSessionRecord?) -> (workspaceId: String, surfaceId: String)? {
+            guard !hasUnusableDirectBinding else {
+#if DEBUG
+                agentHookDebugLog(
+                    "agentHook.target.nil agent=\(def.name) subcommand=\(subcommand) session=\(agentHookDebugShort(sessionId)) reason=invalidDirectBinding mapped=\(mapped == nil ? 0 : 1)",
+                    socketPath: client.socketPath,
+                    env: env
+                )
+#endif
+                return nil
+            }
+            func resolveTarget(
+                workspaceId: String,
+                preferredSurfaceId: String?,
+                mapped: ClaudeHookSessionRecord?
+            ) -> (workspaceId: String, surfaceId: String)? {
+                if let preferredSurfaceId = nonEmptyClaudeHookIdentifier(preferredSurfaceId),
+                   let surfaceId = resolveAccessibleSurfaceId(preferredSurfaceId, workspaceId: workspaceId) {
+                    return (workspaceId, surfaceId)
+                }
+
+                if let mappedSurface = nonEmptyClaudeHookIdentifier(mapped?.surfaceId),
+                   let surfaceId = resolveAccessibleSurfaceId(mappedSurface, workspaceId: workspaceId) {
+                    return (workspaceId, surfaceId)
+                }
+
+                guard let surfaceId = resolveDefaultSurfaceId(workspaceId: workspaceId) else {
+                    return nil
+                }
+                return (workspaceId, surfaceId)
+            }
+
+            if let workspaceId = resolvedDirectWorkspaceArg {
+                let preferredSurfaceId = resolvedDirectSurfaceArg
+                    ?? (hookWsFlag == nil ? processBinding()?.surfaceId : nil)
+                let target = resolveTarget(workspaceId: workspaceId, preferredSurfaceId: preferredSurfaceId, mapped: mapped)
+#if DEBUG
+                agentHookDebugLog(
+                    "agentHook.target.\(target == nil ? "nil" : "resolved") agent=\(def.name) subcommand=\(subcommand) session=\(agentHookDebugShort(sessionId)) source=direct workspace=\(agentHookDebugShort(target?.workspaceId ?? workspaceId)) surface=\(agentHookDebugShort(target?.surfaceId)) mapped=\(mapped == nil ? 0 : 1)",
+                    socketPath: client.socketPath,
+                    env: env
+                )
+#endif
+                return target
+            }
+
+            let binding = processBinding()
+            if let workspaceId = resolveAccessibleWorkspaceId(binding?.workspaceId),
+               let target = resolveTarget(
+                   workspaceId: workspaceId,
+                   preferredSurfaceId: binding?.surfaceId,
+                   mapped: mapped
+               ) {
+#if DEBUG
+                agentHookDebugLog(
+                    "agentHook.target.resolved agent=\(def.name) subcommand=\(subcommand) session=\(agentHookDebugShort(sessionId)) source=process workspace=\(agentHookDebugShort(target.workspaceId)) surface=\(agentHookDebugShort(target.surfaceId)) mapped=\(mapped == nil ? 0 : 1)",
+                    socketPath: client.socketPath,
+                    env: env
+                )
+#endif
+                return target
+            }
+
+            guard let workspaceId = resolveAccessibleWorkspaceId(mapped?.workspaceId) else {
+#if DEBUG
+                agentHookDebugLog(
+                    "agentHook.target.nil agent=\(def.name) subcommand=\(subcommand) session=\(agentHookDebugShort(sessionId)) reason=noWorkspace mapped=\(mapped == nil ? 0 : 1)",
+                    socketPath: client.socketPath,
+                    env: env
+                )
+#endif
+                return nil
+            }
+            let target = resolveTarget(workspaceId: workspaceId, preferredSurfaceId: nil, mapped: mapped)
+#if DEBUG
+            agentHookDebugLog(
+                "agentHook.target.\(target == nil ? "nil" : "resolved") agent=\(def.name) subcommand=\(subcommand) session=\(agentHookDebugShort(sessionId)) source=mapped workspace=\(agentHookDebugShort(target?.workspaceId ?? workspaceId)) surface=\(agentHookDebugShort(target?.surfaceId)) mapped=\(mapped == nil ? 0 : 1)",
+                socketPath: client.socketPath,
+                env: env
+            )
+#endif
+            return target
         }
         defer {
             if !didSendFeedTelemetry {
@@ -20824,10 +22578,15 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
         switch action {
         case .sessionStart:
             let mapped = sessionId.isEmpty ? nil : (try? store.lookup(sessionId: sessionId))
-            let workspaceId = try resolvePreferredWorkspaceIdForClaudeHook(preferred: nil, fallback: workspaceArg, client: client)
-            let surfaceId = try resolvePreferredSurfaceIdForClaudeHook(preferred: nil, fallback: surfaceArg, workspaceId: workspaceId, client: client)
+            guard let target = resolveAgentHookTarget(mapped: mapped) else {
+                didSendFeedTelemetry = true
+                print("{}")
+                return
+            }
+            let workspaceId = target.workspaceId
+            let surfaceId = target.surfaceId
             sendAgentFeedTelemetry(workspaceId: workspaceId)
-            let pid = inferredCodexAgentPID()
+            let pid = inferredPID
             let launchCommand = agentLaunchCommandFromEnvironment(
                 env,
                 fallbackPID: pid,
@@ -20841,6 +22600,19 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
                     surfaceId: surfaceId,
                     cwd: hookCwd ?? mapped?.cwd,
                     pid: pid,
+                    launchCommand: launchCommand,
+                    runtimeStatus: .running,
+                    updateRuntimeStatus: true
+                )
+                try? store.clearNotificationEmission(sessionId: sessionId)
+                publishAgentSurfaceResumeBinding(
+                    client: client,
+                    workspaceId: workspaceId,
+                    surfaceId: surfaceId,
+                    kind: def.name,
+                    displayName: def.displayName,
+                    sessionId: sessionId,
+                    cwd: hookCwd ?? mapped?.cwd,
                     launchCommand: launchCommand
                 )
             }
@@ -20853,15 +22625,15 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
 
         case .promptSubmit:
             let mapped = sessionId.isEmpty ? nil : (try? store.lookup(sessionId: sessionId))
-            let workspaceId = try resolvePreferredWorkspaceIdForClaudeHook(preferred: workspaceArg, fallback: mapped?.workspaceId, client: client)
-            let surfaceId = try resolvePreferredSurfaceIdForClaudeHook(
-                preferred: surfaceArg,
-                fallback: mapped?.surfaceId,
-                workspaceId: workspaceId,
-                client: client
-            )
+            guard let target = resolveAgentHookTarget(mapped: mapped) else {
+                didSendFeedTelemetry = true
+                print("{}")
+                return
+            }
+            let workspaceId = target.workspaceId
+            let surfaceId = target.surfaceId
             sendAgentFeedTelemetry(workspaceId: workspaceId)
-            let pid = mapped?.pid ?? inferredCodexAgentPID()
+            let pid = mapped?.pid ?? inferredPID
             let launchCommand = agentLaunchCommandFromEnvironment(
                 env,
                 fallbackPID: pid,
@@ -20875,7 +22647,20 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
                     surfaceId: surfaceId,
                     cwd: hookCwd ?? mapped?.cwd,
                     pid: pid,
-                    launchCommand: launchCommand
+                    launchCommand: launchCommand,
+                    runtimeStatus: .running,
+                    updateRuntimeStatus: true
+                )
+                try? store.clearNotificationEmission(sessionId: sessionId)
+                publishAgentSurfaceResumeBinding(
+                    client: client,
+                    workspaceId: workspaceId,
+                    surfaceId: surfaceId,
+                    kind: def.name,
+                    displayName: def.displayName,
+                    sessionId: sessionId,
+                    cwd: hookCwd ?? mapped?.cwd,
+                    launchCommand: launchCommand ?? mapped?.launchCommand
                 )
             }
             if let pid {
@@ -20884,7 +22669,10 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
                     client: client
                 )
             }
-            _ = try? sendV1Command("clear_notifications --tab=\(workspaceId)", client: client)
+            _ = try? sendV1Command(
+                "clear_notifications --tab=\(workspaceId)\(socketPanelOption(surfaceId))",
+                client: client
+            )
             _ = try sendV1Command(
                 "set_status \(def.statusKey) Running --icon=bolt.fill --color=#4C8DFF --tab=\(workspaceId)\(socketPanelOption(surfaceId))",
                 client: client
@@ -20901,6 +22689,13 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
                     telemetry.breadcrumb(
                         "codex-hook.monitor.lease-unavailable",
                         data: ["has_turn_id": normalizedHookValue(input.turnId) != nil]
+                    )
+                } else {
+                    retireCodexMonitorLeases(
+                        sessionId: sessionId,
+                        turnId: nil,
+                        preservingLeasePath: leasePath,
+                        env: env
                     )
                 }
                 startCodexTranscriptMonitor(
@@ -20923,96 +22718,331 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
                     retireCodexMonitorLeases(sessionId: sessionId, turnId: stopTurnId, env: env)
                 }
             }
-            do {
-                let mapped = sessionId.isEmpty ? nil : (try? store.lookup(sessionId: sessionId))
-                let workspaceId = try resolvePreferredWorkspaceIdForClaudeHook(preferred: workspaceArg, fallback: mapped?.workspaceId, client: client)
-                let surfaceId = try resolvePreferredSurfaceIdForClaudeHook(preferred: surfaceArg, fallback: mapped?.surfaceId, workspaceId: workspaceId, client: client)
-                sendAgentFeedTelemetry(workspaceId: workspaceId)
-                let pid = mapped?.pid ?? inferredCodexAgentPID()
-                let codexFailure: CodexHookFailureSummary?
-                if def.name == "codex" {
-                    codexFailure = summarizeCodexHookFailure(parsedInput: input, sessionId: sessionId, env: env)
-                } else {
-                    codexFailure = nil
-                }
+            let mapped = sessionId.isEmpty ? nil : (try? store.lookup(sessionId: sessionId))
+            guard let target = resolveAgentHookTarget(mapped: mapped) else {
+                didSendFeedTelemetry = true
+                print("{}")
+                return
+            }
+            let workspaceId = target.workspaceId
+            let surfaceId = target.surfaceId
+            sendAgentFeedTelemetry(workspaceId: workspaceId)
+            let pid = mapped?.pid ?? inferredPID
+            let codexFailure: CodexHookFailureSummary?
+            if def.name == "codex" {
+                codexFailure = summarizeCodexHookFailure(parsedInput: input, sessionId: sessionId, env: env)
+            } else {
+                codexFailure = nil
+            }
 
-                let lastMsg = input.object?["last_assistant_message"] as? String
-                    ?? input.object?["lastAssistantMessage"] as? String
-                let cwd = hookCwd ?? mapped?.cwd
-                let projectName: String? = {
-                    guard let cwd, !cwd.isEmpty else { return nil }
-                    return URL(fileURLWithPath: NSString(string: cwd).expandingTildeInPath).lastPathComponent
-                }()
-                var subtitle = codexFailure?.subtitle ?? String(
-                    localized: "agent.codex.completion.subtitle.completed",
-                    defaultValue: "Completed"
+            let cwd = hookCwd ?? mapped?.cwd
+            let grokAssistantMessage: String? = {
+                guard def.name == "grok" else { return nil }
+                return latestGrokAssistantMessage(
+                    cwd: cwd,
+                    sessionId: input.sessionId ?? sessionId,
+                    env: env
                 )
-                if codexFailure == nil, let projectName, !projectName.isEmpty {
-                    subtitle = String.localizedStringWithFormat(
-                        String(
-                            localized: "agent.codex.completion.subtitle.completedInProject",
-                            defaultValue: "Completed in %@"
-                        ),
-                        projectName
-                    )
-                }
-                let body = codexFailure?.body
-                    ?? lastMsg.map { truncate(normalizedSingleLine($0), maxLength: 200) }
-                    ?? String.localizedStringWithFormat(
-                        String(
-                            localized: "agent.codex.completion.body.sessionCompleted",
-                            defaultValue: "%@ session completed"
-                        ),
-                        def.displayName
-                    )
+            }()
+            let lastMsg = input.object?["last_assistant_message"] as? String
+                ?? input.object?["lastAssistantMessage"] as? String
+            let projectName: String? = {
+                guard let cwd, !cwd.isEmpty else { return nil }
+                return URL(fileURLWithPath: NSString(string: cwd).expandingTildeInPath).lastPathComponent
+            }()
+            var subtitle = codexFailure?.subtitle ?? String(
+                localized: "agent.codex.completion.subtitle.completed",
+                defaultValue: "Completed"
+            )
+            if codexFailure == nil, let projectName, !projectName.isEmpty {
+                subtitle = String.localizedStringWithFormat(
+                    String(
+                        localized: "agent.codex.completion.subtitle.completedInProject",
+                        defaultValue: "Completed in %@"
+                    ),
+                    projectName
+                )
+            }
+            let body = codexFailure?.body
+                ?? lastMsg.map { truncate(normalizedSingleLine($0), maxLength: 200) }
+                ?? grokAssistantMessage.map { truncate(normalizedSingleLine($0), maxLength: 200) }
+                ?? String.localizedStringWithFormat(
+                    String(
+                        localized: "agent.codex.completion.body.sessionCompleted",
+                        defaultValue: "%@ session completed"
+                    ),
+                    def.displayName
+                )
+            let stopNotificationStatus: AgentHookNotificationStatus = codexFailure == nil ? .idle : .error
 
-                if !sessionId.isEmpty {
-                    let launchCommand = agentLaunchCommandFromEnvironment(
-                        env,
-                        fallbackPID: pid,
-                        fallbackKind: def.name,
-                        cwd: cwd
-                    )
-                    try? store.upsert(sessionId: sessionId, workspaceId: workspaceId, surfaceId: surfaceId, cwd: cwd, pid: pid,
-                                      launchCommand: launchCommand,
-                                      lastSubtitle: subtitle,
-                                      lastBody: body)
-                }
-                if let pid {
-                    _ = try? sendV1Command(
-                        "set_agent_pid \(pidKey) \(pid) --tab=\(workspaceId)\(socketPanelOption(surfaceId))",
-                        client: client
-                    )
-                }
+            if !sessionId.isEmpty {
+                let launchCommand = agentLaunchCommandFromEnvironment(
+                    env,
+                    fallbackPID: pid,
+                    fallbackKind: def.name,
+                    cwd: cwd
+                )
+                try? store.upsert(sessionId: sessionId, workspaceId: workspaceId, surfaceId: surfaceId, cwd: cwd, pid: pid,
+                                  launchCommand: launchCommand,
+                                  lastSubtitle: subtitle,
+                                  lastBody: body,
+                                  lastNotificationStatus: stopNotificationStatus,
+                                  updateLastNotificationStatus: true,
+                                  runtimeStatus: runtimeStatus(for: stopNotificationStatus),
+                                  updateRuntimeStatus: true)
+                publishAgentSurfaceResumeBinding(
+                    client: client,
+                    workspaceId: workspaceId,
+                    surfaceId: surfaceId,
+                    kind: def.name,
+                    displayName: def.displayName,
+                    sessionId: sessionId,
+                    cwd: cwd,
+                    launchCommand: launchCommand ?? mapped?.launchCommand
+                )
+            }
+            if let pid {
+                _ = try? sendV1Command(
+                    "set_agent_pid \(pidKey) \(pid) --tab=\(workspaceId)\(socketPanelOption(surfaceId))",
+                    client: client
+                )
+            }
 
+            let notificationFingerprint = notificationDedupeFingerprint(status: stopNotificationStatus)
+            let shouldPublishStopNotification = def.publishesStopNotification
+            let shouldPublishGrokStopFallbackNotification = def.name == "grok" && stopNotificationStatus == .idle
+            let shouldPublishStopAlert = shouldPublishStopNotification || shouldPublishGrokStopFallbackNotification
+            if shouldPublishStopAlert, shouldSendNotification(fingerprint: notificationFingerprint) {
                 let payload = notificationPayload(title: def.displayName, subtitle: subtitle, body: body)
-                _ = try? sendV1Command("notify_target_async \(workspaceId) \(surfaceId) \(payload)", client: client)
-                if let codexFailure {
-                    _ = try? sendV1Command(
-                        "set_status \(def.statusKey) \(codexFailure.statusValue) --icon=exclamationmark.triangle.fill --color=#FF453A --priority=100 --tab=\(workspaceId)\(socketPanelOption(surfaceId))",
-                        client: client
+                let notifyCommand = "notify_target_async \(workspaceId) \(surfaceId) \(payload)"
+#if DEBUG
+                agentHookDebugLog(
+                    "agentHook.stop.notify agent=\(def.name) session=\(agentHookDebugShort(sessionId)) fallback=\(shouldPublishGrokStopFallbackNotification ? 1 : 0) workspace=\(agentHookDebugShort(workspaceId)) surface=\(agentHookDebugShort(surfaceId)) subtitleLen=\(subtitle.count) bodyLen=\(body.count)",
+                    socketPath: client.socketPath,
+                    env: env
+                )
+#endif
+                do {
+                    let response = try sendV1Command(notifyCommand, client: client)
+#if DEBUG
+                    agentHookDebugLog(
+                        "agentHook.stop.notify.sent agent=\(def.name) session=\(agentHookDebugShort(sessionId)) response=\(response)",
+                        socketPath: client.socketPath,
+                        env: env
                     )
-                } else {
-                    let idleStatus = String(localized: "agent.codex.status.idle", defaultValue: "Idle")
-                    _ = try? sendV1Command(
-                        "set_status \(def.statusKey) \(idleStatus) --icon=pause.circle.fill --color=#8E8E93 --tab=\(workspaceId)\(socketPanelOption(surfaceId))",
-                        client: client
+#endif
+                    markNotificationSent(fingerprint: notificationFingerprint)
+                } catch {
+#if DEBUG
+                    agentHookDebugLog(
+                        "agentHook.stop.notify.error agent=\(def.name) session=\(agentHookDebugShort(sessionId)) error=\(String(describing: error))",
+                        socketPath: client.socketPath,
+                        env: env
                     )
+#endif
                 }
-            } catch {
-                if shouldIgnoreClaudeHookTeardownError(error) {
-                    telemetry.breadcrumb("\(def.name)-hook.stop.ignored", data: ["error": String(describing: error)])
-                } else {
-                    throw error
+            } else if shouldPublishStopAlert {
+#if DEBUG
+                agentHookDebugLog(
+                    "agentHook.stop.notify.skipDuplicate agent=\(def.name) session=\(agentHookDebugShort(sessionId)) fallback=\(shouldPublishGrokStopFallbackNotification ? 1 : 0) fingerprint=\(agentHookDebugShort(notificationFingerprint))",
+                    socketPath: client.socketPath,
+                    env: env
+                )
+#endif
+            }
+            if let codexFailure {
+                _ = try? sendV1Command(
+                    "set_status \(def.statusKey) \(codexFailure.statusValue) --icon=exclamationmark.triangle.fill --color=#FF453A --priority=100 --tab=\(workspaceId)\(socketPanelOption(surfaceId))",
+                    client: client
+                )
+            } else {
+                setIdleStatusUnlessAnotherSessionIsRunning(workspaceId: workspaceId, surfaceId: surfaceId)
+            }
+
+        case .notification:
+            let mapped = sessionId.isEmpty ? nil : (try? store.lookup(sessionId: sessionId))
+            guard let target = resolveAgentHookTarget(mapped: mapped) else {
+                didSendFeedTelemetry = true
+                print("{}")
+                return
+            }
+            let workspaceId = target.workspaceId
+            let surfaceId = target.surfaceId
+
+            let notificationCwd = hookCwd ?? mapped?.cwd
+#if DEBUG
+            agentHookDebugLog(
+                "agentHook.notification.target agent=\(def.name) session=\(agentHookDebugShort(sessionId)) workspace=\(agentHookDebugShort(workspaceId)) surface=\(agentHookDebugShort(surfaceId)) mapped=\(mapped == nil ? 0 : 1) hasCwd=\(notificationCwd == nil ? 0 : 1)",
+                socketPath: client.socketPath,
+                env: env
+            )
+#endif
+            if def.name == "grok",
+               let notificationMessage = normalizedAgentHookNotificationMessage(parsedInput: input) {
+                if isGrokInternalSessionNotification(notificationMessage) {
+#if DEBUG
+                    agentHookDebugLog(
+                        "agentHook.notification.skip agent=\(def.name) session=\(agentHookDebugShort(sessionId)) reason=internalSessionNotification messageLen=\(notificationMessage.count)",
+                        socketPath: client.socketPath,
+                        env: env
+                    )
+#endif
+                    print("{}")
+                    return
                 }
             }
+
+            var summary = summarizeAgentHookNotification(
+                def: def,
+                parsedInput: input,
+                cwd: notificationCwd,
+                env: env,
+                sessionId: input.sessionId ?? sessionId
+            )
+            if summary.isFallback, let savedBody = mapped?.lastBody, !savedBody.isEmpty {
+                summary = AgentHookNotificationSummary(
+                    subtitle: mapped?.lastSubtitle ?? summary.subtitle,
+                    body: savedBody,
+                    status: mapped?.lastNotificationStatus,
+                    isFallback: false
+                )
+            }
+
+#if DEBUG
+            agentHookDebugLog(
+                "agentHook.notification.summary agent=\(def.name) session=\(agentHookDebugShort(sessionId)) status=\(summary.status?.rawValue ?? "nil") fallback=\(summary.isFallback ? 1 : 0) subtitleLen=\(summary.subtitle.count) bodyLen=\(summary.body.count)",
+                socketPath: client.socketPath,
+                env: env
+            )
+#endif
+
+            if def.name == "grok", summary.status == nil {
+#if DEBUG
+                agentHookDebugLog(
+                    "agentHook.notification.skip agent=\(def.name) session=\(agentHookDebugShort(sessionId)) reason=nonTerminalNotification subtitleLen=\(summary.subtitle.count) bodyLen=\(summary.body.count)",
+                    socketPath: client.socketPath,
+                    env: env
+                )
+#endif
+                print("{}")
+                return
+            }
+
+            if !sessionId.isEmpty {
+                let pid = mapped?.pid ?? inferredPID
+                let launchCommand = agentLaunchCommandFromEnvironment(
+                    env,
+                    fallbackPID: pid,
+                    fallbackKind: def.name,
+                    cwd: hookCwd ?? mapped?.cwd
+                )
+                try? store.upsert(
+                    sessionId: sessionId,
+                    workspaceId: workspaceId,
+                    surfaceId: surfaceId,
+                    cwd: notificationCwd,
+                    pid: pid,
+                    launchCommand: launchCommand,
+                    lastSubtitle: summary.subtitle,
+                    lastBody: summary.body,
+                    lastNotificationStatus: summary.status,
+                    updateLastNotificationStatus: true,
+                    runtimeStatus: runtimeStatus(for: summary.status),
+                    updateRuntimeStatus: summary.status != nil
+                )
+            }
+
+            let notificationFingerprint = notificationDedupeFingerprint(status: summary.status)
+            if shouldSendNotification(fingerprint: notificationFingerprint) {
+                let payload = notificationPayload(title: def.displayName, subtitle: summary.subtitle, body: summary.body)
+                let notifyCommand = "notify_target_async \(workspaceId) \(surfaceId) \(payload)"
+#if DEBUG
+                agentHookDebugLog(
+                    "agentHook.notification.notify agent=\(def.name) session=\(agentHookDebugShort(sessionId)) workspace=\(agentHookDebugShort(workspaceId)) surface=\(agentHookDebugShort(surfaceId))",
+                    socketPath: client.socketPath,
+                    env: env
+                )
+#endif
+                do {
+                    let response = try sendV1Command(notifyCommand, client: client)
+#if DEBUG
+                    agentHookDebugLog(
+                        "agentHook.notification.notify.sent agent=\(def.name) session=\(agentHookDebugShort(sessionId)) response=\(response)",
+                        socketPath: client.socketPath,
+                        env: env
+                    )
+#endif
+                    markNotificationSent(fingerprint: notificationFingerprint)
+                } catch {
+#if DEBUG
+                    agentHookDebugLog(
+                        "agentHook.notification.notify.error agent=\(def.name) session=\(agentHookDebugShort(sessionId)) error=\(String(describing: error))",
+                        socketPath: client.socketPath,
+                        env: env
+                    )
+#endif
+                }
+            } else {
+#if DEBUG
+                agentHookDebugLog(
+                    "agentHook.notification.notify.skipDuplicate agent=\(def.name) session=\(agentHookDebugShort(sessionId)) fingerprint=\(agentHookDebugShort(notificationFingerprint))",
+                    socketPath: client.socketPath,
+                    env: env
+                )
+#endif
+            }
+
+            switch summary.status {
+            case .needsInput?:
+                let statusValue = String.localizedStringWithFormat(
+                    String(localized: "agent.generic.notification.status.needsInput", defaultValue: "%@ needs input"),
+                    def.displayName
+                )
+                _ = try? sendV1Command(
+                    "set_status \(def.statusKey) \(statusValue) --icon=bell.fill --color=#4C8DFF --priority=100 --tab=\(workspaceId)\(socketPanelOption(surfaceId))",
+                    client: client
+                )
+            case .error?:
+                let statusValue = String.localizedStringWithFormat(
+                    String(localized: "agent.generic.notification.status.error", defaultValue: "%@ error"),
+                    def.displayName
+                )
+                _ = try? sendV1Command(
+                    "set_status \(def.statusKey) \(statusValue) --icon=exclamationmark.triangle.fill --color=#FF453A --priority=100 --tab=\(workspaceId)\(socketPanelOption(surfaceId))",
+                    client: client
+                )
+            case .idle?:
+                setIdleStatusUnlessAnotherSessionIsRunning(workspaceId: workspaceId, surfaceId: surfaceId)
+            case nil:
+                break
+            }
+            sendAgentFeedTelemetry(workspaceId: workspaceId)
 
         case .sessionEnd:
             if def.name == "codex", !sessionId.isEmpty {
                 retireCodexMonitorLeases(sessionId: sessionId, turnId: nil, env: env)
             }
+            if def.name == "grok" {
+                if let mapped = sessionId.isEmpty ? nil : (try? store.lookup(sessionId: sessionId)) {
+                    sendAgentFeedTelemetry(workspaceId: mapped.workspaceId)
+                }
+#if DEBUG
+                agentHookDebugLog(
+                    "agentHook.sessionEnd.keep agent=\(def.name) session=\(agentHookDebugShort(sessionId)) reason=turnBoundary",
+                    socketPath: client.socketPath,
+                    env: env
+                )
+#endif
+                break
+            }
             if let mapped = try? store.consume(sessionId: sessionId, workspaceId: nil, surfaceId: nil) {
                 sendAgentFeedTelemetry(workspaceId: mapped.workspaceId)
+                clearAgentSurfaceResumeBinding(
+                    client: client,
+                    workspaceId: mapped.workspaceId,
+                    surfaceId: mapped.surfaceId,
+                    sessionId: mapped.sessionId
+                )
                 _ = try? sendV1Command(
                     "clear_agent_pid \(pidKey) --tab=\(mapped.workspaceId)\(socketPanelOption(mapped.surfaceId)) --clear-status",
                     client: client
@@ -21090,7 +23120,7 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
         guard let data = try? JSONSerialization.data(withJSONObject: frame),
               let line = String(data: data, encoding: .utf8)
         else { return }
-        _ = try? client.send(command: line)
+        _ = try? client.send(command: line, responseTimeout: 0.75)
     }
 
     private func feedContextForEvent(
@@ -21507,7 +23537,7 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
         case "post-tool-use": return "PostToolUse"
         case "stop", "idle": return "Stop"
         case "session-end": return "SessionEnd"
-        case "notification": return "Notification"
+        case "notification", "notify": return "Notification"
         default: return ""
         }
     }
@@ -22781,7 +24811,7 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
                     appendIfExisting(current.appendingPathComponent("Contents/Resources/opencode-plugin.js", isDirectory: false))
                     break
                 }
-                let projectMarker = current.appendingPathComponent("GhosttyTabs.xcodeproj/project.pbxproj")
+                let projectMarker = current.appendingPathComponent("cmux.xcodeproj/project.pbxproj")
                 let repoResource = current.appendingPathComponent("Resources/opencode-plugin.js", isDirectory: false)
                 if fileManager.fileExists(atPath: projectMarker.path),
                    fileManager.fileExists(atPath: repoResource.path) {
@@ -23550,8 +25580,11 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
     private static func hooksCommandNeedsCmuxTarget(_ commandArgs: [String]) -> Bool {
         guard let first = commandArgs.first?.lowercased() else { return false }
         if first == "feed" || first == "claude" { return true }
-        guard Self.agentDef(named: first) != nil else { return false }
+        guard let def = Self.agentDef(named: first) else { return false }
         let action = commandArgs.dropFirst().first?.lowercased()
+        if def.name == "grok" {
+            return false
+        }
         return action != "install" && action != "uninstall"
     }
 
@@ -23817,6 +25850,7 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
           \(bold)\u{2318}\u{21E7}R\(reset)\(subdued)                 Rename workspace\(reset)
           \(bold)\u{2318}\u{21E7}L\(reset)\(subdued)                 New browser\(reset)
           \(bold)\u{2318}\u{21E7}U\(reset)\(subdued)                 Jump to latest unread\(reset)
+          \(bold)\u{2325}\u{2318}U\(reset)\(subdued)                 Toggle unread\(reset)
         """
 
         print()
@@ -23911,7 +25945,7 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
         var current = executableURL.deletingLastPathComponent().standardizedFileURL
 
         while true {
-            let projectFile = current.appendingPathComponent("GhosttyTabs.xcodeproj/project.pbxproj")
+            let projectFile = current.appendingPathComponent("cmux.xcodeproj/project.pbxproj")
             if fileManager.fileExists(atPath: projectFile.path),
                let contents = try? String(contentsOf: projectFile, encoding: .utf8) {
                 var info: [String: String] = [:]
@@ -24040,7 +26074,7 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
                 appendIfExisting(current.appendingPathComponent("Info.plist"))
             }
 
-            let projectMarker = current.appendingPathComponent("GhosttyTabs.xcodeproj/project.pbxproj")
+            let projectMarker = current.appendingPathComponent("cmux.xcodeproj/project.pbxproj")
             let repoInfo = current.appendingPathComponent("Resources/Info.plist")
             if fileManager.fileExists(atPath: projectMarker.path),
                fileManager.fileExists(atPath: repoInfo.path) {
@@ -24082,18 +26116,12 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
     }
 
     private func currentExecutablePath() -> String? {
-        var size: UInt32 = 0
-        _ = _NSGetExecutablePath(nil, &size)
-        if size > 0 {
-            var buffer = Array<CChar>(repeating: 0, count: Int(size))
-            if _NSGetExecutablePath(&buffer, &size) == 0 {
-                let path = String(cString: buffer).trimmingCharacters(in: .whitespacesAndNewlines)
-                if !path.isEmpty {
-                    return path
-                }
-            }
+        if let path = CLIExecutableLocator.currentExecutableURL()?.path
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !path.isEmpty {
+            return path
         }
-        return Bundle.main.executableURL?.path ?? args.first
+        return args.first
     }
 
     func resolvedExecutableURL() -> URL? {
@@ -24141,6 +26169,7 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
           shortcuts
           disable-browser | enable-browser | browser-status
           restore-session
+          open <path-or-url>... [--workspace <id|ref|index>] [--surface <id|ref|index>] [--pane <id|ref|index>] [--window <id|ref|index>] [--focus <true|false>] [--no-focus]
           feedback [--email <email> --body <text> [--image <path> ...]]
           feed tui|clear
           themes [list|set|clear]
@@ -24178,7 +26207,7 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
           list-panes [--workspace <id|ref>]
           list-pane-surfaces [--workspace <id|ref>] [--pane <id|ref>]
           tree [--all] [--workspace <id|ref|index>]
-          top [--all] [--workspace <id|ref|index>] [--processes] [--sort <cpu|rss|proc>] [--flat] [--format <tree|tsv>]
+          top [--all] [--workspace <id|ref|index>] [--processes] [--sort <cpu|mem|proc>] [--flat] [--format <tree|tsv>]
           focus-pane --pane <id|ref> [--workspace <id|ref>]
           new-pane [--type <terminal|browser>] [--direction <left|right|up|down>] [--workspace <id|ref>] [--url <url>] [--focus <true|false>]
           new-surface [--type <terminal|browser>] [--pane <id|ref>] [--workspace <id|ref>] [--url <url>] [--focus <true|false>]
@@ -24187,6 +26216,7 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
           split-off --surface <id|ref|index> <left|right|up|down> [--workspace <id|ref|index>] [--focus <true|false>]
           reorder-surface --surface <id|ref|index> (--index <n> | --before <id|ref|index> | --after <id|ref|index>) [--focus <true|false>]
           tab-action --action <name> [--tab <id|ref|index>] [--surface <id|ref|index>] [--workspace <id|ref|index>] [--title <text>] [--url <url>] [--focus <true|false>]
+          surface resume <set|show|get|clear> [--workspace <id|ref>] [--surface <id|ref>]
           rename-tab [--workspace <id|ref>] [--tab <id|ref>] [--surface <id|ref>] <title>
           drag-surface-to-split --surface <id|ref|index> <left|right|up|down> [--workspace <id|ref|index>] [--focus <true|false>]
           refresh-surfaces
@@ -24214,7 +26244,7 @@ export default function cmuxPiSessionExtension(pi: ExtensionAPI) {
           jump-to-unread
           clear-notifications
           right-sidebar <toggle|show|hide|focus|set|mode|files|find|vault|sessions|feed|dock> [--workspace <id|ref|index>] [--window <id|ref|index>] [--no-focus]
-          set-status <key> <value> [--workspace <id|ref>] [--icon <name>] [--color <#hex>]
+          set-status <key> <value> [--workspace <id|ref>] [--icon <name>] [--color <#hex>] [--priority <n>]
           clear-status <key> [--workspace <id|ref>]
           list-status [--workspace <id|ref>]
           set-progress <0.0-1.0> [--label <text>] [--workspace <id|ref>]

@@ -17,7 +17,6 @@ extension AgentLaunchSanitizer {
             "--effort",
             "--fallback-model",
             "--file",
-            "--fork-session",
             "--from-pr",
             "--input-format",
             "--json-schema",
@@ -76,6 +75,7 @@ extension AgentLaunchSanitizer {
         droppedOptions: [
             "--continue",
             "-c",
+            "--file",
             "--fork-session",
             "--from-pr",
             "--resume",
@@ -86,6 +86,7 @@ extension AgentLaunchSanitizer {
             "-w"
         ],
         droppedOptionPrefixes: [
+            "--file=",
             "--fork-session=",
             "--from-pr=",
             "--resume=",
@@ -126,8 +127,7 @@ extension AgentLaunchSanitizer {
         ],
         variadicOptions: [
             "--image",
-            "-i",
-            "--add-dir"
+            "-i"
         ],
         nonRestorableCommands: [
             "exec",
@@ -152,6 +152,8 @@ extension AgentLaunchSanitizer {
         ],
         droppedOptions: [
             "--last",
+            "--image",
+            "-i",
             "--remote",
             "--remote-auth-token-env",
             "--all"
@@ -161,6 +163,80 @@ extension AgentLaunchSanitizer {
             "--remote-auth-token-env="
         ],
         resumeSubcommand: "resume"
+    )
+
+    static let grokPolicy = Policy(
+        valueOptions: [
+            "--agent",
+            "--agents",
+            "--allow",
+            "--cwd",
+            "--deny",
+            "--disallowed-tools",
+            "--effort",
+            "--max-turns",
+            "--model",
+            "-m",
+            "--permission-mode",
+            "--reasoning-effort",
+            "--resume",
+            "-r",
+            "--rules",
+            "--sandbox",
+            "--system-prompt-override",
+            "--tools",
+            "--worktree",
+            "-w"
+        ],
+        optionalValueOptions: [
+            "--resume",
+            "-r",
+            "--worktree",
+            "-w"
+        ],
+        nonRestorableCommands: [
+            "agent",
+            "help",
+            "import",
+            "inspect",
+            "leader",
+            "login",
+            "mcp",
+            "memory",
+            "models",
+            "sessions",
+            "setup",
+            "share",
+            "ssh",
+            "trace",
+            "update",
+            "version",
+            "v",
+            "worktree"
+        ],
+        droppedOptions: [
+            "--continue",
+            "-c",
+            "--restore-code",
+            "--resume",
+            "-r",
+            "--worktree",
+            "-w"
+        ],
+        droppedOptionPrefixes: [
+            "--resume=",
+            "-r=",
+            "--worktree=",
+            "-w="
+        ],
+        rejectOptions: [
+            "--best-of-n",
+            "--output-format",
+            "--prompt-file",
+            "--prompt-json",
+            "--single",
+            "-p"
+        ]
     )
 
     static let piPolicy = Policy(
@@ -424,6 +500,8 @@ extension AgentLaunchSanitizer {
             "--hostname",
             "--mdns-domain",
             "--cors",
+            "--file",
+            "-f",
             "--model",
             "-m",
             "--session",
@@ -462,12 +540,17 @@ extension AgentLaunchSanitizer {
         droppedOptions: [
             "--continue",
             "-c",
+            "--file",
+            "-f",
             "--fork",
             "--session",
             "-s",
             "--prompt"
         ],
         droppedOptionPrefixes: [
+            "--file=",
+            "-f=",
+            "--fork=",
             "--session=",
             "--prompt="
         ],
